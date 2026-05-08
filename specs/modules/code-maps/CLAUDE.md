@@ -14,7 +14,7 @@
 - Every public type derives `Serialize + Deserialize + Clone + Debug`.
 - Errors: `thiserror`-based `CodeMapError`; never panic on malformed source.
 - Avoid clones on hot paths; tree-sitter `Node` is `Copy`.
-- N-API exposure in a sibling crate (`kit-code-maps-napi`) so the core is napi-free for tests.
+- The core crate has zero callers other than other Rust crates; keep it dependency-light. The Tauri shim lives in `gui-shell/src-tauri`, not here.
 
 ## Module boundaries
 

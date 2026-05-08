@@ -6,13 +6,13 @@
 
 ## 1. Purpose
 
-Generate **token-efficient structural summaries** ("Code Maps") of source files using tree-sitter. Repo-Prompt-style: instead of feeding 7M tokens of full source into a prompt, feed an 85K-token summary that exposes class/function signatures, imports, exports, and module relationships. Used by the GUI's file picker and by `kit-engine` when assembling agent prompts.
+Generate **token-efficient structural summaries** ("Code Maps") of source files using tree-sitter. Repo-Prompt-style: instead of feeding 7M tokens of full source into a prompt, feed an 85K-token summary that exposes class/function signatures, imports, exports, and module relationships. Called directly from `skill-runner` (Rust crate-to-crate) when assembling agent prompts and exposed to the GUI via Tauri commands for the file picker.
 
 ## 2. User stories
 
 | ID | As a... | I want to... | So that... |
 |---|---|---|---|
-| CM-1 | Pi extension assembling a prompt | Get a Code Map for `src/auth.ts` | I send signatures, not 800 lines of body |
+| CM-1 | `skill-runner` assembling a prompt | Get a Code Map for `src/auth.ts` | I send signatures, not 800 lines of body |
 | CM-2 | GUI file picker | Show the symbol outline of every selected file | The user sees what's in scope at a glance |
 | CM-3 | `/project-execute` skill | Get a token-budgeted Code Map for the whole repo | The dispatch prompt fits in the model's context |
 | CM-4 | `/project-spec` skill | Generate a dependency map of `src/modules/*` | The spec template auto-fills "Integration Points" |
@@ -62,7 +62,7 @@ pub fn render_markdown(map: &CodeMap) -> String;       // for prompt embedding
 pub fn budget(maps: Vec<CodeMap>, max_tokens: usize) -> Vec<CodeMap>;  // priority-based pruning
 ```
 
-Exposed via N-API to TypeScript and via Tauri commands to React.
+Called directly as a Rust crate by `skill-runner`. Exposed to React via Tauri commands from `gui-shell`. No N-API, no Node bindings — see `SPEC_REVISION_2026-05-08.md` for the pivot rationale.
 
 ## 5. Business rules
 
@@ -78,10 +78,10 @@ Exposed via N-API to TypeScript and via Tauri commands to React.
 
 | Module | Relationship | Notes |
 |---|---|---|
-| `kit-engine` | Depends on (read) | Generates Code Maps when assembling agent prompts |
-| `gui-shell` | Depends on (read) | File picker viewer + symbol outline |
+| `skill-runner` | Used by | Generates Code Maps when assembling agent prompts (direct Rust call) |
+| `gui-shell` | Used by | File picker viewer + symbol outline (Tauri commands) |
 | `session-store` | None | Code Maps regenerate on demand; not persisted |
-| `workflow-skills` | Indirect (via kit-engine) | — |
+| `spec-engine` | Used by | Optional — `/project-spec` may call `generate_directory` to auto-fill Integration Points |
 
 ## 7. Acceptance criteria
 
@@ -89,8 +89,8 @@ Exposed via N-API to TypeScript and via Tauri commands to React.
 - [ ] Generates a Code Map for a 1000-line TypeScript file in <100ms.
 - [ ] `generate_directory` on a 50-file Rust crate completes in <2s.
 - [ ] Token estimate within ±15% of actual tokenisation by `tiktoken-rs` for a sample.
-- [ ] N-API bindings round-trip a `CodeMap` to TypeScript without lossy serialisation.
-- [ ] Tauri command exposed as `code_map_for_file(path: PathBuf)`.
+- [ ] `serde_json` round-trip of `CodeMap` is lossless (used by Tauri command serialisation and for cache-on-disk if added later).
+- [ ] Tauri command exposed as `code_map_for_file(path: PathBuf)` — wiring lives in `gui-shell` but the Rust signature must accept a `PathBuf` directly so the Tauri shim is mechanical.
 - [ ] Fallback for files in unsupported languages: return a Code Map with empty `items` + path metadata only.
 
 ## 8. Out of scope
