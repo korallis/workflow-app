@@ -1,9 +1,7 @@
 version: 1
 touches:
   - crates/kit-codex-bridge/**
-  - crates/kit-scrub/**
-shared:
-  - crates/kit-scrub/**
-  - crates/kit-codex-bridge/schemas/codex-report-schema.json
-ports: []
+shared: []
+ports:
+  - 1455
 migrations: false

@@ -113,13 +113,46 @@ Workflow skills (`/project-init` etc.) are markdown content bundled with the app
 | `modules/context-mode-bridge/` | Renamed `context-mode-manager`; supervises subprocess + connects via rmcp client. |
 | `modules/gui-shell/` | Mostly unchanged; drop Pi RPC, replace with direct Tauri commands. |
 
-## Decisions ratified in this revision
+## Decisions ratified in this revision (Round 1)
 
 | # | Question | Decision |
 |---|---|---|
 | 1 | Drop Pi? | **Yes**, entirely. |
 | 2 | Claude routing? | Subprocess wrapper around `claude --print --bare --append-system-prompt-file`. Uses `claude login` → Max. |
-| 3 | Codex routing? | Subprocess wrapper. Uses `codex login` → ChatGPT Plus. Same shape as Claude for consistency. |
-| 4 | Multi-provider abstraction? | None in v1. Both bridges are bespoke. Future Gemini bridge follows the same subprocess pattern. |
+| 3 | Codex routing? | (Initially: subprocess wrapper. **Revised in Round 2 below**.) |
+| 4 | Multi-provider abstraction? | None in v1. Both bridges are bespoke. |
 | 5 | Where do workflow skills live? | Bundled markdown files inside `crates/skill-runner/skills/`. Not a separate npm package. |
 | 6 | Distribution? | Single Tauri bundle (signed for macOS, AppImage for Linux). No npm publishing. |
+
+## Revision Round 2 (same day): Codex direct OAuth, not subprocess
+
+After the Round 1 decisions, the operator clarified: "we want Direct OpenAI integration, the same way that PI Does." Codex CLI subprocess wrapping was the wrong call.
+
+### Re-research findings
+
+OpenAI **explicitly endorses** third-party OAuth integration via the [Codex for Open Source](https://developers.openai.com/community/codex-for-oss) program, which names Pi/OpenCode/Cline/OpenClaw as supported tools. Pi's open-source [`openai-codex` OAuth provider](https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/utils/oauth/openai-codex.ts) and [`openai-codex-responses` streaming provider](https://cdn.jsdelivr.net/npm/@oh-my-pi/pi-ai@13.18.0/src/providers/openai-codex-responses.ts) provide a complete reference for the protocol:
+
+- **OAuth client ID:** `app_EMoamEEZ73f0CkXaXp7hrann` (public; same one Pi/Codex CLI/CodexBar use)
+- **Authorize URL:** `https://auth.openai.com/oauth/authorize`
+- **Token URL:** `https://auth.openai.com/oauth/token`
+- **Redirect URI:** `http://localhost:1455/auth/callback` (OpenAI-whitelisted)
+- **Scope:** `openid profile email offline_access`
+- **API endpoint:** `POST https://chatgpt.com/backend-api/codex/responses`
+- **Required headers:** `Authorization: Bearer <access>`, `ChatGPT-Account-Id: <jwt-claim>`
+- **Required payload fields:** `instructions` (system prompt), `store: false`, `stream: true`, `model`, `input`
+- **Account ID source:** JWT claim `https://api.openai.com/auth.chatgpt_account_id` from access_token
+- **Token refresh:** `grant_type=refresh_token`, ~8 day interval
+
+The asymmetry vs Claude is unavoidable:
+- Anthropic ToS forbids third-party OAuth use → Claude must be subprocess-wrapped.
+- OpenAI explicitly permits third-party OAuth use → Codex IS direct integration.
+
+### Decisions ratified (Round 2)
+
+| # | Question | Decision |
+|---|---|---|
+| 7 | Codex transport (revised) | **Direct OAuth + Responses API.** Implement PKCE flow against `auth.openai.com`, JWT account-id extraction, HTTPS calls to `chatgpt.com/backend-api/codex/responses`. No `codex` CLI subprocess. No `codex-codes` Rust crate (that wraps the CLI). |
+| 8 | Claude transport (unchanged) | Stays as subprocess wrapper around `claude --print --bare`. Anthropic ToS forces this. |
+| 9 | Asymmetry | Documented as policy-driven, not design choice. |
+| 10 | Reference | Replicate Pi's `openai-codex-responses` provider in Rust verbatim (port from TypeScript). |
+| 11 | API key fallback | OAuth only in v1; API key path (Console PAYG) optional in v1.1. |

@@ -108,6 +108,53 @@ There is room for a product that treats the kit's workflow as the *primary produ
 
 None applicable — this is a developer tool, not a consumer product. UK GDPR / healthcare etc. only apply to *projects built with the kit*, not the kit itself. The `/project-security-review` skill (carried over from the bash kit) handles those concerns at the project level.
 
+## 5.4 OpenAI Codex OAuth pattern (added 2026-05-08, Round 2)
+
+OpenAI **explicitly endorses** third-party OAuth use via the [Codex for Open Source](https://developers.openai.com/community/codex-for-oss) program. The page lists "Pi, OpenCoworkAI, Cline, OpenClaw" alongside Codex itself as supported tools. Unlike Anthropic's restrictive consumer ToS, OpenAI's policy permits any tool to authenticate users via the same OAuth client and call the Codex Responses API directly.
+
+### Protocol constants (from Pi's open-source implementation)
+
+Source: [`badlogic/pi-mono` `packages/ai/src/utils/oauth/openai-codex.ts`](https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/utils/oauth/openai-codex.ts)
+
+| Constant | Value |
+|---|---|
+| `CLIENT_ID` | `app_EMoamEEZ73f0CkXaXp7hrann` (public) |
+| Authorize URL | `https://auth.openai.com/oauth/authorize` |
+| Token URL | `https://auth.openai.com/oauth/token` |
+| Redirect URI | `http://localhost:1455/auth/callback` (OpenAI-whitelisted) |
+| Scope | `openid profile email offline_access` |
+| Codex API URL | `https://chatgpt.com/backend-api/codex/responses` |
+| JWT claim path | `https://api.openai.com/auth.chatgpt_account_id` |
+
+### Required request shape
+
+Per Codex CLI's wire format ([`codex-rs/core/src/client.rs`](https://github.com/openai/codex)):
+
+- `store: false` — REQUIRED (ChatGPT backend rejects `true` for OAuth auth)
+- `stream: true` — REQUIRED
+- `instructions: <our system prompt>` — REQUIRED
+- Strip message IDs from prior messages (stateless mode)
+- Include `reasoning.encrypted_content` from prior turns for context continuity
+
+### Implementation refs
+
+- **TypeScript:** Pi's `openai-codex-responses.ts` provider (canonical reference)
+- **Python:** [`codex-auth`](https://pypi.org/project/codex-auth/) — drop-in OpenAI SDK patch using OAuth
+- **Python (LangChain):** [`langchain-codex-oauth`](https://pypi.org/project/langchain-codex-oauth/)
+- **Swift:** [`steipete/CodexBar`](https://github.com/steipete/CodexBar/blob/v0.20/docs/codex-oauth.md) — auth headers + usage endpoint
+- **TypeScript (architecture):** [`ndycode/oc-codex-multi-auth`](https://github.com/ndycode/oc-codex-multi-auth/blob/main/docs/development/ARCHITECTURE.md) — covers `store: false`, message-ID stripping, reasoning encrypted_content
+
+We port Pi's TypeScript implementation to Rust verbatim. No Rust crate currently exists for this protocol (the `codex-codes` crate wraps the Codex CLI, not the underlying API).
+
+### Asymmetric Claude vs Codex routing
+
+| Provider | Path | Why |
+|---|---|---|
+| Claude (Anthropic) | Subprocess wrapper around `claude --print --bare` | ToS forbids third-party OAuth use |
+| Codex (OpenAI) | Direct OAuth + Responses API | OpenAI explicitly endorses third-party OAuth use |
+
+This asymmetry is mandated by the providers, not a design choice.
+
 ## 5.5 Anthropic OAuth ToS finding (added 2026-05-08)
 
 After the initial draft of this document, follow-up research surfaced a critical constraint that overturns the Pi-as-engine recommendation. Anthropic published an explicit policy at [code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use):
@@ -144,7 +191,7 @@ This is documented in `SPEC_REVISION_2026-05-08.md` and reflected throughout the
 1. **Engine: own it. No Pi, no Node.** Rust core (`workflow-core`) spawns Claude and Codex CLIs as subprocesses. ToS-clean for both. Single-binary distribution.
 2. **GUI: Tauri 2.11 + React 19 + Vite + Tailwind v4.** Stable, well-supported, matches ELVES's tested stack.
 3. **Claude: `claude --print --bare --append-system-prompt-file <ours>` (subprocess).** Strips Claude Code's defaults; uses our system prompt; uses Max billing via `claude login`. ToS-clean.
-4. **Codex: `codex exec` (subprocess)** for v1; behind a `CodexTransport` trait. v1.1 adds `codex-codes` typed Rust crate as alt transport for richer JSON-RPC + native approval callbacks.
+4. **Codex: direct OAuth + Codex Responses API.** Replicate Pi's `openai-codex-responses` provider in Rust. PKCE flow against `auth.openai.com`, JWT account-id extraction, HTTPS calls to `chatgpt.com/backend-api/codex/responses`. No subprocess. No `codex-codes` crate. ToS-clean per OpenAI's Codex for OSS endorsement.
 5. **MCP: `rmcp` 1.6.0** for client (calling context-mode); optional server surface (expose kit tools to Claude Code/Cursor) in v1.1.
 6. **Storage: rusqlite + FTS5 (bundled).** Per-project SQLite at `<project>/.kit-workflow-app/state.db`; cross-project at `~/.kit-workflow-app/global.db`.
 7. **Code Maps: Rust crate via tree-sitter `binding_rust`.** Direct call from skill-runner (no N-API needed since it's all Rust).
