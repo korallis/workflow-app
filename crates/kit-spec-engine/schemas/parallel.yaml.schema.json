@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "parallel.yaml",
+  "type": "object",
+  "required": ["version"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "touches": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "shared": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "ports": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 65535
+      },
+      "default": []
+    },
+    "migrations": {
+      "type": "boolean",
+      "default": false
+    }
+  }
+}

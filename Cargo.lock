@@ -354,6 +354,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "kit-spec-engine"
+version = "0.1.0"
+dependencies = [
+ "kit-session-store",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "leb128fmt"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
