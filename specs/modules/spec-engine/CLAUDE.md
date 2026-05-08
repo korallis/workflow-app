@@ -1,5 +1,14 @@
 # spec-engine — Implementation guide
 
+## Implementation status (2026-05-08)
+
+The crate is implemented at `crates/kit-spec-engine/` and meets every SPEC §7 acceptance criterion (11 tests passing). Two known deviations from this guide, both filed as follow-ups:
+
+- **`parallel.yaml` validation is hand-rolled, not via the `jsonschema` crate.** The schema is bundled via `include_str!` and the rules (`version: 1`, required fields, types, allowed keys) are enforced by local code. Functionally equivalent; swap to `jsonschema` once `~/.cargo/registry/cache` is warm.
+- **YAML round-trip is hand-rolled, not via `serde_yaml`.** Lossless for the `ParallelYaml` shape we accept; swap to `serde_yaml` for robustness on edge cases.
+
+Root cause: Codex's `workspace-write` sandbox couldn't fetch new crates on first compile. See LEARNINGS.md → "Pre-fetch crates the SPEC names before `/project-execute`".
+
 ## Patterns
 
 - **`Arc<SessionStore>`** shared state; clone freely.

@@ -44,7 +44,7 @@ The kit, ported to a single Rust binary. No GUI. Users install via `cargo instal
 ### Sprint 1.2 — Spec layer (1–2 wks)
 **Modules:** spec-engine, track-engine.
 
-- [ ] **spec-engine crate**: load/save the full spec hierarchy. JSON Schema validation for `parallel.yaml`. Snapshot persistence to `session-store`.
+- [x] **spec-engine crate**: load/save the full spec hierarchy. Snapshot persistence to `session-store`. 11 tests passing. **Follow-up:** `parallel.yaml` validation + parsing are currently hand-rolled (rules match the bundled JSON Schema); swap to `jsonschema` + `serde_yaml` crates once cache is warm — see module CLAUDE.md "Implementation status" and LEARNINGS.md "Codex sandbox + Cargo".
 - [ ] **track-engine crate**: parallel-tracks state machine. Worktree create/cleanup. Merge sequencer (dependency-ordered rebase). Sentinel-watcher for operator-killed panes. Learnings-fragment merge.
 - [ ] Regression suite (port from bash): clean fixture, dep edge, slug boundary, dedupe, brownfield-without-yaml, claude-fails-fast.
 
