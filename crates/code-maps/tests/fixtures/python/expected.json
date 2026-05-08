@@ -1,0 +1,45 @@
+{
+  "path": "python/sample.py",
+  "language": "Python",
+  "imports": [
+    { "module": "import os", "items": [], "line": 1 },
+    { "module": "from pathlib import Path", "items": [], "line": 2 }
+  ],
+  "exports": [
+    { "name": "Project", "kind": "class", "line": 4 },
+    { "name": "load_project", "kind": "function", "line": 7 }
+  ],
+  "items": [
+    {
+      "Class": {
+        "name": "Project",
+        "methods": [],
+        "fields": [],
+        "doc": null
+      }
+    },
+    {
+      "Function": {
+        "name": "load_project",
+        "params": [{ "name": "path", "type_hint": "Path" }],
+        "return_type": "Project",
+        "doc": null,
+        "line": 7,
+        "is_async": true,
+        "is_exported": true
+      }
+    },
+    {
+      "Function": {
+        "name": "_helper",
+        "params": [{ "name": "count", "type_hint": "int" }],
+        "return_type": "int",
+        "doc": null,
+        "line": 10,
+        "is_async": false,
+        "is_exported": false
+      }
+    }
+  ],
+  "stats": { "line_count": 11, "char_count": 183, "token_estimate": 46 }
+}

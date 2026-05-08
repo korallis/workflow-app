@@ -1,0 +1,53 @@
+{
+  "path": "rust/sample.rs",
+  "language": "Rust",
+  "imports": [
+    { "module": "std::path::Path", "items": [], "line": 1 }
+  ],
+  "exports": [
+    { "name": "load_project", "kind": "function", "line": 4 },
+    { "name": "Project", "kind": "struct", "line": 13 },
+    { "name": "ProjectId", "kind": "type", "line": 17 }
+  ],
+  "items": [
+    {
+      "Function": {
+        "name": "load_project",
+        "params": [{ "name": "path", "type_hint": "&Path" }],
+        "return_type": "Result<Project, Error>",
+        "doc": "Loads a project from disk.",
+        "line": 4,
+        "is_async": true,
+        "is_exported": true
+      }
+    },
+    {
+      "Function": {
+        "name": "helper",
+        "params": [{ "name": "count", "type_hint": "usize" }],
+        "return_type": "usize",
+        "doc": null,
+        "line": 8,
+        "is_async": false,
+        "is_exported": false
+      }
+    },
+    {
+      "Class": {
+        "name": "Project",
+        "methods": [],
+        "fields": [],
+        "doc": "A project record."
+      }
+    },
+    { "Type": { "name": "ProjectId", "definition": "pub type ProjectId = String" } },
+    {
+      "Constant": {
+        "name": "DEFAULT_LIMIT",
+        "type_hint": "usize",
+        "doc": null
+      }
+    }
+  ],
+  "stats": { "line_count": 19, "char_count": 336, "token_estimate": 84 }
+}

@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/session-store"]
+members = ["crates/session-store", "crates/code-maps"]
 resolver = "2"
 
 [workspace.package]

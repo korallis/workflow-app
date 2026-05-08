@@ -1,0 +1,32 @@
+{
+  "path": "javascript/sample.js",
+  "language": "JavaScript",
+  "imports": [
+    { "module": "node:fs", "items": [], "line": 1 }
+  ],
+  "exports": [
+    { "name": "start", "kind": "function", "line": 4 }
+  ],
+  "items": [
+    {
+      "Function": {
+        "name": "start",
+        "params": [{ "name": "port", "type_hint": null }],
+        "return_type": null,
+        "doc": "Starts the app.",
+        "line": 4,
+        "is_async": false,
+        "is_exported": true
+      }
+    },
+    {
+      "Class": {
+        "name": "Server",
+        "methods": [],
+        "fields": [],
+        "doc": null
+      }
+    }
+  ],
+  "stats": { "line_count": 12, "char_count": 170, "token_estimate": 43 }
+}

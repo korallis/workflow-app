@@ -1,0 +1,42 @@
+{
+  "path": "typescript/sample.ts",
+  "language": "TypeScript",
+  "imports": [
+    { "module": "./api", "items": [], "line": 1 }
+  ],
+  "exports": [
+    { "name": "User", "kind": "interface", "line": 4 },
+    { "name": "fetchUser", "kind": "function", "line": 9 },
+    { "name": "MAX_USERS", "kind": "constant", "line": 13 }
+  ],
+  "items": [
+    { "Type": { "name": "User", "definition": "export interface User" } },
+    {
+      "Function": {
+        "name": "fetchUser",
+        "params": [{ "name": "id", "type_hint": "string" }],
+        "return_type": "Promise<User>",
+        "doc": "Fetches one user.",
+        "line": 9,
+        "is_async": true,
+        "is_exported": true
+      }
+    },
+    {
+      "Constant": {
+        "name": "MAX_USERS",
+        "type_hint": "number",
+        "doc": null
+      }
+    },
+    {
+      "Class": {
+        "name": "LocalCache",
+        "methods": [],
+        "fields": [],
+        "doc": null
+      }
+    }
+  ],
+  "stats": { "line_count": 19, "char_count": 337, "token_estimate": 85 }
+}

@@ -1,0 +1,60 @@
+{
+  "path": "go/sample.go",
+  "language": "Go",
+  "imports": [
+    { "module": "fmt", "items": [], "line": 3 }
+  ],
+  "exports": [
+    { "name": "Project", "kind": "struct", "line": 5 },
+    { "name": "LoadProject", "kind": "function", "line": 9 },
+    { "name": "NameLen", "kind": "function", "line": 17 }
+  ],
+  "items": [
+    { "Type": { "name": "Project", "definition": "type Project struct" } },
+    {
+      "Function": {
+        "name": "LoadProject",
+        "params": [{ "name": "path", "type_hint": "string" }],
+        "return_type": "(*Project, error)",
+        "doc": null,
+        "line": 9,
+        "is_async": false,
+        "is_exported": true
+      }
+    },
+    {
+      "Function": {
+        "name": "helper",
+        "params": [{ "name": "count", "type_hint": "int" }],
+        "return_type": "int",
+        "doc": null,
+        "line": 13,
+        "is_async": false,
+        "is_exported": false
+      }
+    },
+    {
+      "Function": {
+        "name": "NameLen",
+        "params": [],
+        "return_type": "int",
+        "doc": null,
+        "line": 17,
+        "is_async": false,
+        "is_exported": true
+      }
+    },
+    {
+      "Function": {
+        "name": "printProject",
+        "params": [{ "name": "p", "type_hint": "Project" }],
+        "return_type": null,
+        "doc": null,
+        "line": 21,
+        "is_async": false,
+        "is_exported": false
+      }
+    }
+  ],
+  "stats": { "line_count": 23, "char_count": 316, "token_estimate": 79 }
+}

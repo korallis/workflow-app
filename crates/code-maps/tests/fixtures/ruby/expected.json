@@ -1,0 +1,45 @@
+{
+  "path": "ruby/sample.rb",
+  "language": "Ruby",
+  "imports": [
+    { "module": "require \"json\"", "items": [], "line": 1 }
+  ],
+  "exports": [
+    { "name": "Project", "kind": "class", "line": 3 },
+    { "name": "initialize", "kind": "function", "line": 4 },
+    { "name": "load_project", "kind": "function", "line": 9 }
+  ],
+  "items": [
+    {
+      "Class": {
+        "name": "Project",
+        "methods": [],
+        "fields": [],
+        "doc": null
+      }
+    },
+    {
+      "Function": {
+        "name": "initialize",
+        "params": [{ "name": "name", "type_hint": null }],
+        "return_type": null,
+        "doc": null,
+        "line": 4,
+        "is_async": false,
+        "is_exported": true
+      }
+    },
+    {
+      "Function": {
+        "name": "load_project",
+        "params": [{ "name": "path", "type_hint": null }],
+        "return_type": null,
+        "doc": null,
+        "line": 9,
+        "is_async": false,
+        "is_exported": true
+      }
+    }
+  ],
+  "stats": { "line_count": 11, "char_count": 128, "token_estimate": 32 }
+}
