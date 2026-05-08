@@ -35,11 +35,11 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["command", "outcome"],
+        "required": ["command", "outcome", "notes"],
         "properties": {
           "command": { "type": "string" },
           "outcome": { "type": "string", "enum": ["passed", "failed", "skipped"] },
-          "notes": { "type": "string" }
+          "notes": { "type": ["string", "null"], "description": "Optional free-form notes; pass null when none." }
         }
       }
     },
@@ -49,10 +49,10 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["subject", "paths"],
+        "required": ["subject", "body", "paths"],
         "properties": {
           "subject": { "type": "string", "description": "Conventional Commit subject line, <72 chars." },
-          "body": { "type": "string", "description": "Optional commit body explaining motivation." },
+          "body": { "type": ["string", "null"], "description": "Optional commit body explaining motivation; pass null when none." },
           "paths": {
             "type": "array",
             "description": "Repository-relative paths included in this commit.",
