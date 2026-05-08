@@ -2,37 +2,42 @@
 
 ## Patterns
 
-- **Two crates**: `kit-codex-bridge` (Rust core, uses `codex-codes`) and `kit-codex-bridge-napi` (N-API wrapper). Pi extension imports the napi build.
-- **`CodexTransport` trait** in the core crate isolates `codex-codes` so we can add a `CodexMcpTransport` later.
-- **Approval handler is async.** N-API's threadsafe-function pattern lets the Rust side await a JS callback.
-- **JSON Schema enforcement happens twice**: once via Codex's `--output-schema` flag (Codex enforces), once on the orchestrator side (we double-check). Defence in depth.
+- **`CodexTransport` trait** isolates the underlying transport. v1 impl: `CodexExecTransport` (subprocess + JSONL). v1.1 impl: `CodexCodesTransport` (typed JSON-RPC via the `codex-codes` crate).
+- **Tokio `Command`** for `codex exec`; same shape as claude-bridge.
+- **Approval handler is async.** v1 impl polls Codex's interactive approval prompts in stderr (best-effort); v1.1 (codex-codes) gets native callbacks.
+- **JSON Schema enforcement happens twice:** Codex via `--output-schema`, AND skill-runner cross-checks against repo state.
 
 ## Conventions
 
-- Pi tool name: `kit_codex_execute` (snake_case to match Pi conventions).
-- All filesystem paths absolute.
+- Crate name: `kit-codex-bridge`.
 - Default sandbox: `workspace-write`. Document `danger-full-access` opt-in clearly.
-- Subprocess cwd is `opts.cwd`; never inherit Pi's cwd.
-- Report file extension: `-report.json`. Last-message file: `-last.md` (only if no schema; redundant with report otherwise).
+- Subprocess cwd is `opts.cwd`; never inherit.
+- Report file extension: `-report.json`.
+- Schema bundled via `include_str!`.
 
 ## Module boundaries
 
-This module **owns**: Codex subprocess lifecycle, JSON-RPC transport, schema enforcement, approval routing, scrubbing of Codex outputs.
+This module **owns**: Codex subprocess lifecycle, transport (subprocess or app-server), schema enforcement, approval routing, scrubbing of Codex outputs.
 
-This module **must NOT**: assemble prompts (kit-engine), persist state (session-store), commit code (orchestrator does).
+This module **must NOT**: assemble prompts (skill-runner); persist state (session-store); commit code (skill-runner does, after cross-check).
 
 ## Known gotchas
 
-- **Codex `mcp-server` is experimental.** Prefer `codex-codes` (app-server protocol) which is more stable.
-- **Approval requests are server→client.** The bridge MUST register a callback handler; missing handler = silent denial = run aborts mysteriously.
-- **`applyPatchApproval` for self-modifying runs.** When Codex modifies the kit itself, approval requests cluster. Default-deny is safest unless the user explicitly opted in.
-- **Sandbox `workspace-write`** blocks `.git/index.lock`. This is by design — Codex doesn't commit; orchestrator does. Document loudly.
-- **`codex-codes` API is sync OR async.** Use the async client (Tokio); the sync client doesn't compose with N-API threadsafe functions.
+- **`codex exec` approval prompts are interactive.** v1 implementation either runs in `--full-auto` (no approvals) or uses a wrapper that intercepts stderr. v1.1 with codex-codes solves this properly.
+- **Sandbox `workspace-write` blocks `.git/index.lock`.** This is by design — Codex doesn't commit; orchestrator does.
+- **`--output-schema` requires a JSON Schema file path, not inline.** Write opts.schema to a temp file before invocation.
+- **Schema feature interaction:** `--output-schema` + `-o <file>` writes the schema-conformant final message to `<file>`; `--json` + stdout streams events. We use both.
 
 ## Test patterns
 
-- Mock Codex subprocess in unit tests; assert correct args.
-- Real Codex run gated on `CODEX` being on `PATH` + `OPENAI_API_KEY` or `codex login` set.
-- Approval-flow test: simulate an `applyPatchApproval` request; assert handler called; return both `allow` and `deny` paths.
-- Schema-violation test: feed Codex a prompt that produces invalid JSON; assert `schema_violations` non-empty.
-- Timeout test: 60s `on_approval` hang → auto-deny + abort.
+- Mock subprocess in unit tests; assert correct args.
+- Real Codex run gated on `CODEX` on PATH + `codex login` set.
+- Approval-flow test (v1.1): simulate request; assert handler called; both paths.
+- Schema-violation test: feed bad-JSON-producing prompt; assert violations.
+- Timeout test.
+
+## Cargo dependencies
+
+- `tokio`, `serde`, `serde_json`, `jsonschema`, `thiserror`, `tracing`
+- v1.1 only: `codex-codes`
+- Sister crate: `kit-scrub`

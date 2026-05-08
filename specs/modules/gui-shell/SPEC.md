@@ -1,9 +1,8 @@
 # gui-shell — SPEC
 
-> **Status:** Phase 5 of /project-init
 > **Layer:** Shell (Tauri 2 + React 19)
-> **Last updated:** 2026-05-08
-> **Depends on:** all engine modules (via Pi RPC + Tauri commands)
+> **Last updated:** 2026-05-08 (Pi-removal pivot — no Pi RPC; direct Tauri commands into Rust core)
+> **Depends on:** all core Rust crates (session-store, code-maps, spec-engine, track-engine, claude-bridge, codex-bridge, context-mode-manager, skill-runner)
 
 ## 1. Purpose
 
@@ -42,12 +41,15 @@ Plus secondary surfaces: Projects landing, Learnings browser (FTS5-backed), Sett
 
 ## 4. Tauri commands (Rust ↔ frontend)
 
+No Pi RPC. Each Tauri command is a thin wrapper around a Rust core crate API:
+
 ```rust
+// Skill execution
 #[tauri::command]
-async fn pi_rpc(method: String, params: Value) -> Result<Value, String>;
+async fn run_skill(skill: String, args: Value, app: AppHandle, state: State<'_, AppState>) -> Result<SkillResult, String>;
 
 #[tauri::command]
-async fn pi_event_subscribe() -> Result<(), String>;     // emits 'pi://event' Tauri events
+async fn list_skills(state: State<'_, AppState>) -> Result<Vec<SkillMeta>, String>;
 
 #[tauri::command]
 async fn auth_status() -> AuthStatus;
@@ -88,11 +90,10 @@ Pi events flow as Tauri events on the channel `pi://event` with payload typed pe
 
 ## 6. Process model
 
-- Tauri spawns Pi (`@earendil-works/pi-coding-agent`) on app start as a long-lived child via `pi --mode rpc`.
-- Pi runs in its own Node process; communicates over stdio JSONL.
-- Tauri Rust backend holds the Pi process handle in `Mutex<RpcChannel>`.
-- Frontend never talks to Pi directly; always via `pi_rpc` / `pi_event_subscribe`.
-- Shutdown: app close → Tauri sends `shutdown` RPC → wait 5s → SIGTERM → SIGKILL.
+- Single Tauri process. **No Pi, no Node.** Rust core lives in-process as crates.
+- Skill runs spawn per-call: claude-bridge / codex-bridge / context-mode-manager each manage their own subprocesses with proper cleanup on app shutdown.
+- Tauri shared state (`State<AppState>`): `Arc<SkillRunner>`, `Arc<TrackEngine>`, `Arc<SpecEngine>`, etc. Frontend talks to these via Tauri commands; events flow back via Tauri events.
+- Shutdown: `WindowEvent::CloseRequested` → app calls `shutdown_all()` which gracefully stops context-mode subprocess + reaps any in-flight claude/codex children + flushes SQLite WAL.
 
 ## 7. Acceptance criteria
 

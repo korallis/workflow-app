@@ -6,11 +6,13 @@
 
 ## Overview
 
-`workflow-app` is a **solo-dev coding workflow tool**. It packages the `korallis/workflow` AI Project Kit — spec-first / dual-harness / parallel-tracks development — into a single-install desktop application driven by [Pi](https://pi.dev/) as the agent harness.
+`workflow-app` is a **solo-dev coding workflow tool**. It packages the `korallis/workflow` AI Project Kit — spec-first / dual-harness / parallel-tracks development — into a single-install Tauri+Rust desktop application.
 
-The user installs one app, signs into Claude Code and Codex CLI (the app detects what's already there), and gets the full kit workflow without touching slash commands or shell scripts: `init → research → blueprint → module specs → roadmap → dual-harness implementation → isolated review → compound learning → parallel tracks across worktrees`.
+The user installs one app, signs into Claude Code (`claude login` → Max plan) and Codex CLI (`codex login` → ChatGPT Plus), and gets the full kit workflow without touching slash commands or shell scripts: `init → research → blueprint → module specs → roadmap → dual-harness implementation → isolated review → compound learning → parallel tracks across worktrees`.
 
-A thin Tauri+React shell adds a Repo-Prompt-style **visual context-engineering** surface (file picker, tree-sitter Code Maps, Apply Mode diff viewer) and a parallel-tracks dashboard. The engine itself is a **pi-package** (TypeScript extensions + skills + prompt templates) running inside Pi.
+The Tauri+React shell provides a Repo-Prompt-style **visual context-engineering** surface (file picker, tree-sitter Code Maps, Apply Mode diff viewer) and a parallel-tracks dashboard. The engine is a Rust core (`workflow-core`) that spawns Claude and Codex CLIs as subprocesses — uses **the user's existing subscriptions**, never API keys (when configured correctly).
+
+> **Architectural pivot 2026-05-08:** Earlier drafts proposed a Pi-based engine (TypeScript pi-package). Dropped after Anthropic clarified that OAuth tokens for Pro/Max plans are "intended exclusively for Claude Code and Claude.ai. Using OAuth tokens obtained through Claude Free, Pro, or Max accounts in any other product, tool, or service — including the Agent SDK — is not permitted." Pi's Anthropic provider would have violated this. We now invoke Claude Code itself via `claude --print --bare`, which is the explicitly-permitted path. See `SPEC_REVISION_2026-05-08.md`.
 
 ## Problem Statement
 
@@ -46,9 +48,10 @@ A desktop app driven by Pi solves all of these without abandoning the kit's disc
 
 | Constraint | Implication |
 |---|---|
-| Pi is TypeScript-first | Engine logic (skills, extensions) is TypeScript; native code (tree-sitter, SQLite) is wrapped via N-API or WASM and invoked from extensions. |
-| Codex `mcp-server` is experimental | Use [`codex-codes`](https://docs.rs/codex-codes) typed Rust crate (or its TypeScript equivalent) so we can swap transport when the protocol stabilises. |
-| Anthropic ships no Rust SDK | Claude integration is `claude --print --output-format stream-json --include-partial-messages` consumed as JSONL. |
+| Anthropic ToS on OAuth | OAuth tokens for Free/Pro/Max plans may NOT be used outside Claude Code/Claude.ai. We invoke `claude --print --bare` (Claude Code itself); we never ingest the token. ToS-clean. |
+| Anthropic ships no Rust SDK | Claude integration is subprocess + JSONL parsing. `--bare` mode strips Claude Code's defaults so our own system prompt has clean control. |
+| Codex `mcp-server` is experimental | v1 uses `codex exec` subprocess for parity with claude-bridge; behind a `CodexTransport` trait for v1.1 swap to `codex-codes` (typed JSON-RPC). |
+| `ANTHROPIC_API_KEY` env var | If set, Claude Code uses API billing instead of Max. Onboarding detects and warns. |
 | Solo-developer focus | No team features in v1 (no shared cloud state, no multi-user auth). |
 | Cross-platform | Linux + macOS in v1; Windows in v1.1. Avoid platform-specific APIs in shared code. |
 | Auth detection only | App never stores tokens; trusts `claude login` / `codex login` / env vars. Reduces security surface. |

@@ -9,7 +9,9 @@
 
 **Problem.** The bash AI Project Kit (`korallis/workflow`) implements a disciplined spec-first / dual-harness / parallel-tracks workflow but ships as shell scripts + markdown skills that only run inside Claude Code. Discoverability, context efficiency, parallel-tracks UX, auth onboarding, and compound learning all hit hard floors.
 
-**Solution.** A single-install desktop app: a Tauri+Rust shell wrapping a [Pi](https://pi.dev/)-based engine. The engine is a TypeScript pi-package (`@korallis/workflow-skills`) plus a few Rust crates (session-store, code-maps) bridged via N-API. The shell is React + Tauri 2.11 with Repo-Prompt-style visual context engineering (file picker, Code Maps, Apply Mode) and a parallel-tracks plan board.
+**Solution.** A single-install Tauri+Rust desktop app with NO Node/Pi dependency. The Rust core (`workflow-core`) spawns Claude and Codex CLIs as subprocesses, talking to them via their `--print` / `exec` modes — which respects the user's existing `claude login` (Max plan) and `codex login` (ChatGPT Plus) auth. The shell is React + Tauri 2.11 with Repo-Prompt-style visual context engineering (file picker, Code Maps, Apply Mode) and a parallel-tracks plan board.
+
+**ToS-clean by design.** Per [Anthropic's policy](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use): "OAuth authentication (used with Free, Pro, and Max plans) is intended exclusively for Claude Code and Claude.ai. Using OAuth tokens obtained through Claude Free, Pro, or Max accounts in any other product, tool, or service — including the Agent SDK — is not permitted." We never ingest the OAuth token; we invoke Claude Code (the CLI) itself. This is the canonical pattern used by [`hampsterx/claude-mcp-bridge`](https://github.com/hampsterx/claude-mcp-bridge), [`khalilgharbaoui/opencode-claude-code-plugin`](https://github.com/khalilgharbaoui/opencode-claude-code-plugin), [`csbrandt/cc-mcp`](https://github.com/csbrandt/cc-mcp), and [`joesobo/claude-max-api-proxy`](https://github.com/joesobo/claude-max-api-proxy).
 
 **Success criteria.** Per `PROJECT_BRIEF.md` §"Success Criteria".
 
@@ -17,19 +19,20 @@
 
 ## 2. Tech Stack
 
-### Engine layer
+### Core layer (all Rust)
 
 | Layer | Technology | Version | Rationale |
 |---|---|---|---|
-| Agent harness | [Pi](https://pi.dev) (`@earendil-works/pi-coding-agent`) | latest npm | Minimal extensible coding agent; multi-provider via `pi-ai`; sessions JSONL-with-branching; explicitly designed to be extended with custom skills/extensions. Drop-in replacement for the bash kit's "Claude Code as the harness" model. |
-| Pi extension language | TypeScript 5.8 | latest | Pi's extension API is TypeScript-native. |
-| Pi runtime | Node.js | 22 LTS | Pi's runtime. Bundled with the Tauri shell to reduce install surface. |
-| Codex transport | [`codex-codes`](https://docs.rs/codex-codes) Rust crate | latest | Typed JSON-RPC bindings for Codex's app-server protocol. More stable than `codex mcp-server` (which is experimental). Wrapped via N-API for Pi extension consumption. |
-| Claude transport | `claude --print --output-format stream-json` (CLI) | Claude Code 2.x | No Rust SDK from Anthropic; headless mode is canonical. JSONL events parsed in TypeScript. |
-| MCP client/server | [`rmcp`](https://docs.rs/rmcp) | 1.6.0 | Official Anthropic Rust MCP SDK. 9.4M downloads. Apache-2.0. Used both client-side (calling context-mode) and server-side (kit-as-MCP-server). |
+| Agent harness | **None — we own it.** Rust `workflow-core` crate is the harness. | — | Drop-in replacement for the bash kit's `dispatch.sh` + the previously-proposed Pi runtime. ToS-clean for both Claude (via subprocess) and Codex (via subprocess). |
+| Async runtime | Tokio | latest | Subprocess management, async I/O, the obvious choice. |
+| Claude transport | `claude --print --bare --append-system-prompt-file <ours>` (subprocess) | Claude Code 2.x | Uses the user's `claude login` (Max plan). `--bare` skips Claude Code's hook/skill/MCP/CLAUDE.md auto-discovery so we own the context. `--append-system-prompt-file` injects OUR system prompt without inheriting "You are Claude Code, Anthropic's official CLI" defaults. Output via `--output-format stream-json --include-partial-messages` parsed as JSONL. |
+| Codex transport | `codex exec` subprocess (preferred) or `codex-codes` typed Rust crate | Codex 0.128+ | `codex exec` uses the user's `codex login` (ChatGPT Plus subscription). Same subprocess shape as claude-bridge for consistency. `codex-codes` available as a fallback for richer JSON-RPC if needed. |
+| MCP client | [`rmcp`](https://docs.rs/rmcp) | 1.6.0 | Official Anthropic Rust MCP SDK. 9.4M downloads. Apache-2.0. Used to talk to context-mode (the only MCP server we host). |
+| MCP server (optional) | [`rmcp`](https://docs.rs/rmcp) | 1.6.0 | If we want to expose the kit's tools (track status, learnings query) to other MCP clients (e.g. Claude Code, Cursor). |
 | Storage | rusqlite | 0.31+ (bundled SQLite + FTS5 + WAL) | Per ELVES DECISIONS.md rationale: bundled = no system dep, FTS5 always available. |
 | Code Maps | [tree-sitter](https://github.com/tree-sitter/tree-sitter) `binding_rust` | latest | Repo-Prompt-style structural summaries. 200+ language grammars on crates.io. |
-| Context efficiency | [context-mode](https://github.com/mksglu/context-mode) | latest npm | MCP server, sandboxes tool output (98% reduction). MIT. Managed sidecar. |
+| Context efficiency | [context-mode](https://github.com/mksglu/context-mode) | latest npm | MCP server, sandboxes tool output (98% reduction). MIT. Spawned as a managed subprocess sidecar by `context-mode-manager` crate. |
+| Workflow skills | Markdown files bundled in `crates/skill-runner/skills/<name>.md` | — | The 12 kit slash commands as markdown content. Interpreted by `skill-runner` at runtime. No npm distribution. |
 
 ### Shell layer
 
@@ -51,16 +54,15 @@
 
 | Concern | Choice | Notes |
 |---|---|---|
-| License | MIT | Pi-package + Tauri shell + Rust crates all MIT. |
-| Distribution (engine) | npm: `@korallis/workflow-skills` | Pi-package, semver-tagged. |
-| Distribution (shell) | GitHub Releases | Signed Tauri bundles for macOS (.dmg, .app), AppImage + .deb for Linux. Windows MSI in v1.1. |
-| Auth | Detect-and-guide only | No token storage. Trusts `claude login`, `codex login`, env vars. |
+| License | MIT | Tauri shell + all Rust crates. |
+| Distribution | GitHub Releases (single binary) | Signed Tauri bundles for macOS (.dmg, .app), AppImage + .deb for Linux. Windows MSI in v1.1. **No npm package** — the workflow skills are markdown content embedded in the binary. |
+| Auth | Detect-and-guide only | No token storage. Trusts `claude login` (Max), `codex login` (ChatGPT Plus). The `ANTHROPIC_API_KEY` env var must be UNSET for Claude to use Max billing — onboarding checks and warns. |
 | Telemetry | None | No phone-home; everything local. (`ctx_stats` is local-only.) |
 | Updates | Tauri auto-updater plugin | Opt-in; signed update channel. |
 
 ### Version strategy
 
-Pin major versions in `Cargo.toml` and `package.json`. Track upstream patch releases monthly. Codex MCP server interface is "experimental" — abstract behind a `CodexTransport` trait so we can swap when it stabilises.
+Pin major versions in `Cargo.toml`. Track upstream patch releases monthly. Detect Claude/Codex CLI versions on app start; warn if outside known-compatible range (Claude Code 2.x, Codex 0.128+). Abstract the Codex transport behind a trait so we can swap to `codex mcp-server` if/when it stabilises.
 
 ## 3. Artefact model
 

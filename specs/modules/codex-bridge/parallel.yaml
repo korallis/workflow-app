@@ -1,9 +1,9 @@
 version: 1
 touches:
-  - packages/workflow-skills/extensions/codex-bridge/**
   - crates/kit-codex-bridge/**
-  - crates/kit-codex-bridge-napi/**
+  - crates/kit-scrub/**
 shared:
-  - packages/kit-scrub/**
+  - crates/kit-scrub/**
+  - crates/kit-codex-bridge/schemas/codex-report-schema.json
 ports: []
 migrations: false

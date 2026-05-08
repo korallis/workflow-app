@@ -1,8 +1,8 @@
 version: 1
 touches:
-  - packages/workflow-skills/extensions/claude-bridge/**
-  - packages/kit-scrub/**
+  - crates/kit-claude-bridge/**
+  - crates/kit-scrub/**
 shared:
-  - packages/kit-scrub/**
+  - crates/kit-scrub/**
 ports: []
 migrations: false

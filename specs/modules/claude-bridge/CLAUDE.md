@@ -2,35 +2,40 @@
 
 ## Patterns
 
-- **`child_process.spawn`** for the Claude binary; never `exec` (avoids shell parsing).
-- **JSONL parser** as a Node `Transform` stream; line-by-line, never buffer the full output.
-- **Event normalisation** is a pure function: `normalise(rawEvent: any): ClaudeEvent` with exhaustive switch on `type` + `subtype`.
-- **Read-path scrubbing** is a separate npm package (`@korallis/kit-scrub`) shared with codex-bridge.
+- **Tokio `Command`** for subprocess; `stdout`/`stderr` as `Pipe`; consume via `tokio::io::BufReader::lines()`.
+- **JSONL parser** as a stream combinator: `lines.map(parse_event).buffered()`.
+- **`on_event` callback** invoked for each parsed event; non-blocking; never panics inside the bridge.
+- **Read-path scrubber** in a sibling crate (`kit-scrub`) shared with codex-bridge.
 
 ## Conventions
 
-- Pi extension entry: `packages/workflow-skills/extensions/claude-bridge/index.ts`.
-- Subprocess args constant in `args.ts`; tested in isolation.
-- All filesystem paths absolute; never relative.
-- No `cwd` reliance for Claude invocation — pass `--cwd` explicitly.
+- Crate name: `kit-claude-bridge`.
+- Subprocess args constants in `args.rs`; tested in isolation via `expect_args!`.
+- All filesystem paths absolute; `opts.cwd` always passed via `--cwd`.
+- Output paths derived from `opts.ts` when set (orchestrator-side determinism).
 
 ## Module boundaries
 
-This module **owns**: the Claude subprocess lifecycle, JSONL parsing, read-path scrubbing for Claude's outputs.
+This module **owns**: Claude subprocess lifecycle, JSONL parsing, auth detection, read-path scrubbing of Claude's outputs.
 
-This module **must NOT**: assemble prompts (kit-engine does that), persist state (session-store does that), invoke Codex.
+This module **must NOT**: assemble prompts (skill-runner does that); persist state (session-store does); write commits.
 
 ## Known gotchas
 
-- **`--include-partial-messages`** dramatically increases event volume. UI can throttle; the bridge passes everything through.
-- **Claude's `claude` binary path** — assume it's on `PATH`; surface a clear error if not (`Auth detection` module's job to prevent this earlier).
-- **Stream-json events can have unknown types** (Claude updates ahead of our parser). Keep an "unknown" passthrough lane.
-- **Exit code 124** = timeout from `coreutils timeout`. We're not using `timeout` in Node; we use Node's `child.kill('SIGTERM')` then `setTimeout(SIGKILL)`.
-- **Stderr is mostly noise.** Capture it but only surface to user on non-zero exit.
+- **`ANTHROPIC_API_KEY` overrides OAuth.** Onboarding must warn: when set, Claude Code uses API billing instead of Max. We can't unset env vars from a subprocess after spawn — must surface via UI.
+- **`--bare` skips ALL `~/.claude` hooks and skills.** Document this in onboarding so users know per-project Claude Code customisations don't apply via our bridge.
+- **`stdout` vs `stderr`.** `--output-format stream-json` writes JSONL to stdout; logs go to stderr. Capture both; surface stderr only on non-zero exit.
+- **`--include-partial-messages` increases event volume dramatically.** UI throttles; bridge passes everything through.
+- **Schema versioning of stream-json is not stable** ([anthropic/claude-code#53516](https://github.com/anthropics/claude-code/issues/53516)). Detect Claude version on startup; fail noisily on mismatch.
 
 ## Test patterns
 
-- **Mock the subprocess** in unit tests (record args, feed canned JSONL).
-- **Real subprocess test** (gated on `CLAUDE` being on `PATH`) for end-to-end.
-- **Parser fuzz test** against ~50 captured-real-world JSONL fixtures.
-- **Lifecycle test:** spawn, kill mid-stream, assert cleanup.
+- **Mock subprocess** via a trait + `MockClaude` in tests; assert correct args.
+- **Real subprocess test** gated on `CLAUDE` on `PATH` + logged in.
+- **Parser fuzz test** against captured JSONL fixtures (build a corpus from real runs).
+- **Auth detect test:** mock `~/.claude/.credentials.json` content; assert correct `ClaudeInstall` variant.
+
+## Cargo dependencies
+
+- `tokio` (full), `tokio-stream`, `serde`, `serde_json`, `thiserror`, `tracing`, `chrono`
+- Sister crate: `kit-scrub`

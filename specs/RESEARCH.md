@@ -108,18 +108,49 @@ There is room for a product that treats the kit's workflow as the *primary produ
 
 None applicable — this is a developer tool, not a consumer product. UK GDPR / healthcare etc. only apply to *projects built with the kit*, not the kit itself. The `/project-security-review` skill (carried over from the bash kit) handles those concerns at the project level.
 
+## 5.5 Anthropic OAuth ToS finding (added 2026-05-08)
+
+After the initial draft of this document, follow-up research surfaced a critical constraint that overturns the Pi-as-engine recommendation. Anthropic published an explicit policy at [code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use):
+
+> "OAuth authentication (used with Free, Pro, and Max plans) is intended exclusively for Claude Code and Claude.ai. Using OAuth tokens obtained through Claude Free, Pro, or Max accounts in any other product, tool, or service — including the Agent SDK — is not permitted and constitutes a violation of the Consumer Terms of Service."
+
+Pi's [`pi-ai`](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/providers.md) supports `pi /login anthropic` (writing an `ANTHROPIC_OAUTH_TOKEN`-style credential to `~/.pi/agent/auth.json`), but using it routes traffic through pi-ai → Anthropic API with the Max-plan OAuth token. **This violates Anthropic's consumer ToS.**
+
+The compliant path for "use Claude via Max subscription" is to invoke Claude Code itself. Anthropic explicitly carves out `claude --print` (the headless CLI) — when `claude login` has Max credentials and `ANTHROPIC_API_KEY` is unset, the subprocess uses Max billing via OAuth, ToS-cleanly. Confirmed via:
+
+- [hampsterx/claude-mcp-bridge](https://github.com/hampsterx/claude-mcp-bridge): "Subscription (default): `claude login` (uses your Pro/Max plan, no API credits needed)" — wraps `claude` CLI as an MCP server.
+- [khalilgharbaoui/opencode-claude-code-plugin](https://github.com/khalilgharbaoui/opencode-claude-code-plugin): "wraps the Claude Code CLI (`claude`) and routes model traffic through it instead of the Anthropic HTTP API."
+- [csbrandt/cc-mcp](https://github.com/csbrandt/cc-mcp): supports `systemPrompt` + `appendSystemPrompt` overrides — addresses "we don't want Claude Code's system prompt" via `claude --bare --append-system-prompt-file`.
+- [joesobo/claude-max-api-proxy](https://github.com/joesobo/claude-max-api-proxy): exposes Claude as an OpenAI-compatible HTTP endpoint by wrapping the CLI.
+
+### `claude mcp serve` is NOT the answer
+
+Per [Anthropic docs](https://docs.claude.com/en/docs/claude-code/mcp.md): "this MCP server is simply exposing Claude Code's tools to your MCP client" — Read, Edit, Write, Bash. It exposes Claude Code's local file/shell tools, NOT the agent loop, NOT Claude-the-model. Useless for our purpose.
+
+### Repo Prompt is itself an MCP server, not a Claude wrapper
+
+Per [danielraffel.me/til/2026/03/24](https://danielraffel.me/til/2026/03/24/how-to-install-repoprompt-globally-in-claude-code/): Repo Prompt is a Swift native macOS app that **acts as an MCP server**. Claude Code is the CLIENT; Repo Prompt is the SERVER. Repo Prompt's tools (`context_builder`, `file_search`, `apply_edits`, `get_file_tree`) don't make LLM calls — they're pure context-engineering primitives. Inference happens inside Claude Code (billed via your `claude login`).
+
+### Architectural implication
+
+We **drop Pi entirely**. Our Rust core (`workflow-core`) IS the agent harness. It spawns:
+- `claude --print --bare --append-system-prompt-file <ours>` for Claude (uses Max via `claude login`)
+- `codex exec` (v1) or via `codex-codes` (v1.1) for Codex (uses ChatGPT Plus via `codex login`)
+
+This is documented in `SPEC_REVISION_2026-05-08.md` and reflected throughout the rest of this RESEARCH.md.
+
 ## 6. Recommendations (informing Phase 4 Blueprint)
 
-1. **Engine: Pi (TypeScript) via npm.** Don't reimplement the agent loop.
+1. **Engine: own it. No Pi, no Node.** Rust core (`workflow-core`) spawns Claude and Codex CLIs as subprocesses. ToS-clean for both. Single-binary distribution.
 2. **GUI: Tauri 2.11 + React 19 + Vite + Tailwind v4.** Stable, well-supported, matches ELVES's tested stack.
-3. **Codex: `codex-codes` Rust crate.** Typed transport with version-insulation.
-4. **Claude: `claude --print --output-format stream-json`.** No Rust SDK option; headless mode is canonical.
-5. **MCP: `rmcp` 1.6.0** for both client (calling context-mode) and server (kit-as-MCP-surface).
-6. **Storage: rusqlite + FTS5 (bundled).** Per-project SQLite at `~/.kit-workflow-app/<project>.db`.
-7. **Code Maps: Rust crate via tree-sitter `binding_rust`.** Wrapped via N-API for the Pi extension and via Tauri commands for the GUI.
-8. **context-mode: managed sidecar MCP server.** Launched on first /project-execute or /project-tracks invocation; supervised by the GUI shell.
-9. **Distribution: dual.** Pi-package on npm (`@korallis/workflow-skills`), Tauri shell on GitHub Releases (signed for macOS, AppImage for Linux).
-10. **Build the project using itself.** First non-trivial /project-execute should be `kit-engine` from inside an early dogfood version — proves the workflow shape survives.
+3. **Claude: `claude --print --bare --append-system-prompt-file <ours>` (subprocess).** Strips Claude Code's defaults; uses our system prompt; uses Max billing via `claude login`. ToS-clean.
+4. **Codex: `codex exec` (subprocess)** for v1; behind a `CodexTransport` trait. v1.1 adds `codex-codes` typed Rust crate as alt transport for richer JSON-RPC + native approval callbacks.
+5. **MCP: `rmcp` 1.6.0** for client (calling context-mode); optional server surface (expose kit tools to Claude Code/Cursor) in v1.1.
+6. **Storage: rusqlite + FTS5 (bundled).** Per-project SQLite at `<project>/.kit-workflow-app/state.db`; cross-project at `~/.kit-workflow-app/global.db`.
+7. **Code Maps: Rust crate via tree-sitter `binding_rust`.** Direct call from skill-runner (no N-API needed since it's all Rust).
+8. **context-mode: managed sidecar MCP server.** Spawned by `kit-context-mode-manager` Rust crate; connected via `rmcp` MCP client.
+9. **Distribution: single Tauri bundle.** No npm publishing. Signed `.dmg`/`.app` for macOS, AppImage + `.deb` for Linux. Windows MSI in v1.1.
+10. **Build the project using itself.** First non-trivial /project-execute should be `track-engine` from inside an early dogfood version — proves the workflow shape survives translation from bash to Rust.
 
 ---
 

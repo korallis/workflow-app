@@ -1,0 +1,7 @@
+version: 1
+touches:
+  - crates/kit-skill-runner/**
+shared:
+  - crates/kit-skill-runner/templates/**
+ports: []
+migrations: false

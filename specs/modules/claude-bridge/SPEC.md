@@ -1,101 +1,142 @@
 # claude-bridge — SPEC
 
-> **Status:** Phase 5 of /project-init
-> **Layer:** Engine (TypeScript Pi extension)
-> **Last updated:** 2026-05-08
+> **Layer:** Core (Rust crate `kit-claude-bridge`)
+> **Last updated:** 2026-05-08 (Pi-removal pivot — was a Pi extension; now a Rust crate)
 
 ## 1. Purpose
 
-Spawn Claude Code in headless mode (`claude --print --output-format stream-json --include-partial-messages`) and expose its execution as a Pi tool (`kit_claude_execute`). Parse the JSONL event stream into a normalised event shape that Pi can route. No Anthropic Rust SDK exists; this is the canonical integration path.
+Spawn Claude Code in headless `--bare` mode with our own system prompt and parse its JSONL event stream. **Uses the user's `claude login`** (Claude Pro/Max plan, OAuth) — does not consume API credits. ToS-clean: we invoke Claude Code itself, exactly the path Anthropic carves out in [their auth/credential policy](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use).
 
 ## 2. User stories
 
 | ID | As a... | I want to... | So that... |
 |---|---|---|---|
-| CB-1 | `/project-module` skill | Run Claude on a module spec and stream events back | Single-harness implementation works without leaving Pi |
-| CB-2 | `/project-execute` (Claude harness option, future) | Run Claude with the same dispatch contract as Codex | Harness choice is a flag, not a code path |
-| CB-3 | GUI plan board | See live agent_message + file_change events | The pane is informative without raw JSON |
-| CB-4 | Logs subsystem | Capture JSONL to `.kit-orchestration/<TS>.jsonl` while events route through Pi | Both human review and machine reanalysis are possible |
+| CB-1 | skill-runner | Run a skill backed by Claude with our system prompt | The agent has our brand/identity, not Claude Code's defaults |
+| CB-2 | skill-runner | Stream JSONL events back through Tauri events | The GUI shows live progress |
+| CB-3 | onboarding | Detect Claude Code is installed + `claude login` is active + `ANTHROPIC_API_KEY` is unset | Max billing actually applies |
+| CB-4 | track-engine via DispatchFn | Spawn one claude per track | Parallel tracks each have their own subprocess |
 
-## 3. Public Pi tool
+## 3. Public API
 
-```typescript
-kit_claude_execute(opts: {
-  prompt: string;                                       // assembled by the caller (skill)
-  cwd: string;
-  model?: string;                                       // override
-  permission_mode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
-  timeout_seconds?: number;                             // default 1800
-  ts?: string;                                          // KIT_DISPATCH_TS equivalent for filename determinism
-}): ClaudeExecResult
+```rust
+pub struct ClaudeBridge { /* config, paths */ }
 
-interface ClaudeExecResult {
-  ok: boolean;
-  exit_code: number;
-  log_path: string;
-  jsonl_path: string;
-  last_message_path: string;
-  events: ClaudeEvent[];                                // full event log (also streamed live)
-  proposed_commits?: ProposedCommit[];                  // populated if final message is JSON
+impl ClaudeBridge {
+    pub fn detect() -> Result<ClaudeInstall>;     // version + auth + ANTHROPIC_API_KEY warning
+
+    pub async fn execute(&self, opts: ClaudeOpts) -> Result<ClaudeResult>;
+}
+
+pub struct ClaudeOpts {
+    pub prompt: String,
+    pub system_prompt_path: PathBuf,                // mandatory; --append-system-prompt-file
+    pub cwd: PathBuf,
+    pub model: Option<String>,                      // override (default: user's settings)
+    pub allowed_tools: Vec<String>,                 // e.g. ["Read", "Edit", "Bash"]
+    pub permission_mode: PermissionMode,            // default | acceptEdits | dontAsk | bypassPermissions | plan
+    pub timeout: Duration,                          // default 1800s
+    pub ts: String,                                 // KIT_DISPATCH_TS for filename determinism
+    pub on_event: Box<dyn Fn(ClaudeEvent) + Send + Sync>,    // streaming hook
+}
+
+pub struct ClaudeResult {
+    pub ok: bool,
+    pub exit_code: i32,
+    pub log_path: PathBuf,                          // raw .log
+    pub jsonl_path: PathBuf,                        // raw JSONL events
+    pub last_message_path: PathBuf,
+    pub events: Vec<ClaudeEvent>,
+    pub proposed_commits: Vec<ProposedCommit>,      // parsed from final message if JSON
+    pub schema_violations: Vec<String>,             // empty when final message validates
 }
 ```
 
-## 4. Event shape (normalised)
+## 4. Subprocess invocation
 
-```typescript
-type ClaudeEvent =
-  | { type: 'thread_started'; thread_id: string }
-  | { type: 'turn_started' }
-  | { type: 'turn_completed'; usage: { input: number; output: number; cached: number } }
-  | { type: 'turn_failed'; error: { message: string } }
-  | { type: 'tool_use'; tool: string; input: unknown; status: 'running' | 'completed' | 'failed'; output?: string }
-  | { type: 'file_change'; kind: 'created' | 'modified' | 'deleted'; path: string }
-  | { type: 'agent_message'; text: string }
-  | { type: 'reasoning'; summary: string }              // when reasoning summaries enabled
-  | { type: 'error'; message: string }
-  | { type: 'api_retry'; attempt: number; max: number; delay_ms: number };
+```bash
+claude --print \
+  --bare \
+  --append-system-prompt-file <our-system-prompt.md> \
+  --output-format stream-json \
+  --include-partial-messages \
+  --cwd <opts.cwd> \
+  --allowedTools <opts.allowed_tools.join(",")> \
+  [--permission-mode <opts.permission_mode>] \
+  [--model <opts.model>]
 ```
 
-Mirrors the Codex event shape (codex-bridge) so kit-engine + GUI can treat them identically.
+`--bare` is critical: it skips Claude Code's auto-discovery of hooks, skills, plugins, MCP servers, auto-memory, and CLAUDE.md. We get a clean baseline; our own `--append-system-prompt-file` is the only context.
 
-## 5. Business rules
+## 5. Event shape (normalised)
 
-- **Prompt is provided by the caller** (kit-engine assembles it). claude-bridge never interpolates context itself.
-- **Read-path scrubbing:** `.jsonl` and `last-message` files pass through scrub-secrets before re-entering Pi context. Bundled scrubber crate (`kit-scrub`) ports the kit's bash `scrub-secrets.sh`.
-- **Exit code propagation.** Non-zero exits surface as `ok: false`; the caller decides what to do.
-- **Timeout enforcement.** SIGTERM after `timeout_seconds`; SIGKILL after +10s. Default 1800s.
-- **Process lifecycle owned by claude-bridge.** No leaking child processes; cleanup on Pi shutdown.
-- **No model defaulting.** Caller must pass `model` if they want to override the user's `~/.claude` settings.
-- **Schema-validated output is OPTIONAL for Claude** (Anthropic doesn't ship `--output-schema`). When the caller wants structured reports, prompt them and validate after — best-effort.
+Mirrors codex-bridge's event shape for consistency in skill-runner:
 
-## 6. Integration points
+```rust
+pub enum ClaudeEvent {
+    ThreadStarted { thread_id: String },
+    TurnStarted,
+    TurnCompleted { input_tokens: u32, output_tokens: u32, cached: u32 },
+    TurnFailed { message: String },
+    ToolUse { tool: String, input: serde_json::Value, status: ToolStatus, output: Option<String> },
+    FileChange { kind: FileChangeKind, path: PathBuf },
+    AgentMessage { text: String },
+    Reasoning { summary: String },
+    Error { message: String },
+    ApiRetry { attempt: u32, max: u32, delay_ms: u32 },
+}
+```
 
-| Module | Relationship | Notes |
-|---|---|---|
-| kit-engine | Used by | Pi tool `kit_claude_execute` |
-| codex-bridge | Sibling (mirror shape) | Event normalisation matches |
-| context-mode-bridge | Adjacent | Tool outputs route through context-mode for free (it intercepts at the Pi tool layer) |
-| session-store | None | claude-bridge is stateless |
-| gui-shell | Indirect (via Pi events) | — |
+## 6. Auth detection
 
-## 7. Acceptance criteria
+`ClaudeBridge::detect()` checks:
 
-- [ ] `kit_claude_execute` round-trip on a fixture (echo prompt) within 5s.
-- [ ] JSONL parser handles partial-message streaming (`--include-partial-messages`) without buffer overflow.
-- [ ] All `ClaudeEvent` variants covered by tests; unknown event types pass through as `{ type: 'unknown'; raw: string }` rather than throwing.
+| Check | Action on failure |
+|---|---|
+| `claude --version` exits 0 | Return `ClaudeInstall::NotInstalled` with install instructions |
+| `claude login` status (parsed from `~/.claude/.credentials.json`) | Return `ClaudeInstall::NotLoggedIn` with login instructions |
+| `ANTHROPIC_API_KEY` env var | Return `ClaudeInstall::ApiKeyOverride` with **warning** that Max billing won't apply unless this is unset |
+| Version compatibility (Claude Code 2.x) | Warn but allow |
+
+Onboarding (gui-shell) calls this and surfaces the appropriate UX.
+
+## 7. Business rules
+
+- **`--bare` is mandatory.** Never invoke `claude --print` without it from this crate. Otherwise Claude Code's hooks/CLAUDE.md/MCP discovery contaminate our run.
+- **System prompt via `--append-system-prompt-file`** (not `--append-system-prompt`). The latter has shell-quoting fragility on long prompts.
+- **Per-call subprocess.** No long-running daemon. Each `execute` spawns and reaps. Simpler lifecycle, smaller state surface.
+- **Read-path scrubbing.** `.jsonl` and last-message files pass through `kit-scrub` before re-entering Rust string state. Catches `sk-ant-...`, `sk-...`, `ghp_...`, `xox[abps]-...`, JWTs.
+- **Timeout enforcement.** `Tokio::time::timeout` around the subprocess; SIGTERM → 10s grace → SIGKILL.
+- **Working directory.** Always `--cwd opts.cwd`; never inherit the app's cwd.
+- **`KIT_DISPATCH_TS`.** When `opts.ts` is set, all output filenames use it for orchestrator-side determinism.
+
+## 8. Integration points
+
+| Module | Relationship |
+|---|---|
+| skill-runner | Caller |
+| track-engine | Indirect via DispatchFn; one `execute` per track |
+| codex-bridge | Sibling — same event/result shape |
+| kit-scrub (sibling crate) | Read-path scrubbing |
+| context-mode-manager | Orthogonal — context-mode runs as MCP server; Claude calls it via its own MCP client surface (when `KIT_CONTEXT_MODE_DISABLE` is unset) |
+
+## 9. Acceptance criteria
+
+- [ ] `cargo test --package kit-claude-bridge` — unit tests for arg construction, event normalisation, scrubber.
+- [ ] Real subprocess test (gated on `claude` being on PATH + logged in): echo prompt round-trip in <5s.
+- [ ] `--bare` is in every invocation (asserted by integration test inspecting subprocess args).
+- [ ] System prompt does NOT include "You are Claude Code" string when produced via this bridge.
+- [ ] JSONL parser handles partial-message streaming.
 - [ ] Timeout SIGTERM → SIGKILL works on Linux + macOS.
-- [ ] `last_message_path` exists and is non-empty after a successful run.
-- [ ] Read-path scrubber strips `sk-ant-...`, `sk-...`, `ghp_...`, `xox[abps]-...`, JWTs.
-- [ ] Pi extension exposes `kit_claude_execute` and unloads cleanly on Pi shutdown.
+- [ ] Detect path: ANTHROPIC_API_KEY present → returns `ApiKeyOverride` warning.
 
-## 8. Out of scope
+## 10. Out of scope
 
-- Claude API direct integration (subprocess only).
-- Custom permission UI in v1 (relies on Claude's own approval flow when `permission_mode='default'`).
-- Session resumption (Claude has its own; we don't proxy it in v1).
-- File checkpointing (Claude SDK feature; we don't expose v1).
+- Claude API direct integration (subprocess only — by design).
+- Rust SDK integration (Anthropic doesn't ship one).
+- Custom approval UI (use Claude Code's `permission_mode='acceptEdits'` for orchestration runs; interactive approvals not in v1).
+- Session resume across runs in v1.
 
-## 9. Open questions
+## 11. Open questions
 
-- [ ] **Approval surfacing.** Claude's `permission_mode='default'` blocks on user approval; do we forward those prompts to the GUI, or require `acceptEdits` for orchestration runs?
-- [ ] **Stream-json schema stability.** Per [issue #53516](https://github.com/anthropics/claude-code/issues/53516), schema isn't versioned. Pin Claude version at install or detect at startup?
+- [ ] **`--mcp-config` opt-in.** Should our bridge inject a custom `--mcp-config` (e.g. to reach context-mode)? Or let Claude's user-global config handle it? v1: pass nothing; rely on user setup.
+- [ ] **`--permission-mode dontAsk`** vs. fine-grained `--allowedTools`. Per Anthropic docs, allowedTools is preferred. Default to that.

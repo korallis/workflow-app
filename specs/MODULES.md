@@ -3,46 +3,61 @@
 > **Status:** Phase 3 of /project-init
 > **Last updated:** 2026-05-08
 
-Eight cohesive modules. The split deliberately separates **engine** (Pi extensions, TypeScript) from **shell** (Tauri+Rust GUI) so the engine can run headless (TUI-only mode, CI mode, MCP-server mode) and the shell can stay thin.
+Nine cohesive modules. **All Rust** (except for the React frontend inside gui-shell). No Pi, no Node, no npm. The split separates concerns by domain so each crate can be tested in isolation and the GUI shell is thin.
+
+> **Architectural pivot 2026-05-08:** The previous version of this document had Pi extensions in TypeScript. See `SPEC_REVISION_2026-05-08.md` for the rationale (Anthropic ToS finding + simpler distribution).
 
 ## Module list
 
 | # | Name | Layer | Language | Depends on | Used by | Purpose |
 |---|---|---|---|---|---|---|
-| 1 | **workflow-skills** | Engine | TypeScript (Pi prompts/skills) | (Pi) | All harness invocations | The kit's 12 slash commands as Pi prompt templates + `SKILL.md` files. Drop-in replacement for `.claude/skills/*` in the bash kit. |
-| 2 | **kit-engine** | Engine | TypeScript Pi extension + native Rust crate (N-API) | session-store, code-maps | workflow-skills, gui-shell | Spec-engine (CRUD over `specs/*`), track-engine (parallel-tracks state, worktree management, merge sequencer). Replaces bash `dispatch.sh` + `project-tracks.sh`. |
-| 3 | **codex-bridge** | Engine | TypeScript Pi extension + Rust crate (N-API) | (codex-codes crate) | workflow-skills, kit-engine | Spawns Codex via `codex-codes` typed transport. Schema-validated reports (`codex-report-schema.json`). Approval callbacks. |
-| 4 | **claude-bridge** | Engine | TypeScript Pi extension | — | workflow-skills, kit-engine | Spawns `claude --print --output-format stream-json --include-partial-messages` and parses JSONL events. |
-| 5 | **context-mode-bridge** | Engine | TypeScript Pi extension | (context-mode npm) | All harness invocations (transparently) | Manages [context-mode](https://github.com/mksglu/context-mode) as a sidecar MCP server. PreToolUse hook routes outputs through `ctx_execute`/`ctx_search`. |
-| 6 | **session-store** | Engine | Rust crate (rusqlite + FTS5) | — | kit-engine, gui-shell | Per-project SQLite database. Tracks registry, learnings (FTS5-indexed), spec snapshots. Replaces `tracks.json` + `LEARNINGS.md` grep. |
-| 7 | **code-maps** | Engine | Rust crate (tree-sitter binding_rust) | — | kit-engine, gui-shell | Compressed structural summaries: classes, functions, imports, exports. Token-efficient context for Pi prompts. Repo-Prompt-style. |
-| 8 | **gui-shell** | Shell | Rust + Tauri 2 + React 19 + Vite + Tailwind v4 | All engine modules via Pi RPC + Tauri commands | (the user) | Plan board (parallel-tracks dashboard), visual file picker, Code Maps viewer, Apply Mode diff viewer, onboarding/auth detection screen. |
+| 1 | **session-store** | Core | Rust crate (rusqlite + FTS5) | — | track-engine, gui-shell, skill-runner | Per-project SQLite. Tracks registry, learnings (FTS5-indexed), spec snapshots. Replaces bash `tracks.json` + `LEARNINGS.md` grep. |
+| 2 | **code-maps** | Core | Rust crate (tree-sitter `binding_rust`) | — | gui-shell, skill-runner | Compressed structural summaries (classes, functions, imports, exports). Token-efficient prompt context. Repo-Prompt-style. |
+| 3 | **spec-engine** | Core | Rust crate | session-store | track-engine, skill-runner, gui-shell | Spec hierarchy CRUD: `PROJECT_BRIEF.md`, `MASTER_BLUEPRINT.md`, `MODULES.md`, `ROADMAP.md`, per-module `SPEC.md`/`CLAUDE.md`/`parallel.yaml`. Schema-validated. |
+| 4 | **track-engine** | Core | Rust crate | session-store, spec-engine | skill-runner, gui-shell | Parallel-tracks state machine. Worktree management. Merge sequencer. Sentinel-watcher. Port of bash `project-tracks.sh` with all CodeRabbit-vetted invariants carried forward. |
+| 5 | **claude-bridge** | Core | Rust crate (Tokio subprocess + JSONL parser) | — | skill-runner | Spawns `claude --print --bare --append-system-prompt-file <ours> --output-format stream-json --include-partial-messages`. Uses `claude login` → Max plan. Our system prompt; not Claude Code's defaults. ToS-clean. |
+| 6 | **codex-bridge** | Core | Rust crate (Tokio subprocess; `codex-codes` for richer JSON-RPC) | — | skill-runner | Spawns Codex via `codex exec` (or `codex-codes` typed transport). Uses `codex login` → ChatGPT Plus. Schema-validated final reports (`codex-report-schema.json`). Approval callbacks. |
+| 7 | **context-mode-manager** | Core | Rust crate (Tokio subprocess + `rmcp` MCP client) | — | skill-runner (transparently) | Spawns and supervises [`mksglu/context-mode`](https://github.com/mksglu/context-mode) as an MCP server sidecar. Routes tool outputs through `ctx_execute`/`ctx_search`. Optional (`KIT_CONTEXT_MODE_DISABLE=1` to skip). |
+| 8 | **skill-runner** | Core | Rust crate; bundles markdown skills as embedded assets | spec-engine, track-engine, claude-bridge, codex-bridge, context-mode-manager, code-maps | gui-shell | Interprets the 12 kit slash commands (markdown files bundled in `skills/`). For each skill: assembles prompts (using code-maps), routes to claude-bridge or codex-bridge, processes results. The "agent loop" sits here. |
+| 9 | **gui-shell** | Shell | Rust + Tauri 2.11 + React 19 + Vite + Tailwind v4 | All core modules (Tauri commands) | (the user) | Plan board, visual file picker + Code Maps, Apply Mode diff viewer, learnings browser, onboarding/auth detection. Single binary. |
 
 ## Dependency graph
 
 ```text
-                    ┌─────────────┐
-                    │ gui-shell   │ (Tauri+React, the user surface)
-                    └──┬─────┬────┘
-                       │     │
-                       ▼     ▼
-              ┌─────────┐  ┌──────────┐
-              │workflow-│  │kit-engine│ (Pi extensions + native Rust)
-              │skills   │  └──┬──┬────┘
-              └─────────┘     │  │
-                              ▼  ▼
-            ┌────────────┬─────────┬──────────────┐
-            │codex-bridge│claude-  │context-mode- │
-            │            │bridge   │bridge        │
-            └─────┬──────┴──┬──────┴───────┬──────┘
-                  │         │              │
-                  ▼         ▼              ▼
-              ┌─────────────────────────────┐
-              │  session-store + code-maps  │ (Rust crates)
-              └─────────────────────────────┘
+                    ┌──────────────────┐
+                    │   gui-shell      │  (Tauri 2 + React, the user surface)
+                    └────────┬─────────┘
+                             │  Tauri commands + events
+                             ▼
+                    ┌──────────────────┐
+                    │  skill-runner    │  (interprets bundled markdown skills,
+                    │                  │   owns the agent loop)
+                    └──┬──┬──┬──┬──┬───┘
+                       │  │  │  │  │
+              ┌────────┘  │  │  │  └────────────┐
+              │           │  │  │               │
+              ▼           ▼  ▼  ▼               ▼
+         ┌──────────┐ ┌─────┐┌─────┐ ┌────────────────┐ ┌──────────┐
+         │ spec-    │ │claud││codex│ │ context-mode-  │ │ code-    │
+         │ engine   │ │ -    │ -   │ │ manager        │ │ maps     │
+         │          │ │bridge│bridge │                │ │          │
+         └────┬─────┘ └──┬──┘ └──┬──┘ └────────┬───────┘ └──────────┘
+              │          │       │             │
+              ▼          ▼       ▼             ▼  (sidecar)
+         ┌─────────┐  spawn   spawn         spawn
+         │ track-  │  claude  codex          context-mode
+         │ engine  │  --print exec           (MCP server)
+         └────┬────┘
+              │
+              ▼
+       ┌──────────────┐
+       │session-store │  (rusqlite + FTS5 + WAL)
+       └──────────────┘
 
-External dependencies (system or npm):
-  Pi (npm) | codex (CLI) | claude (CLI) | context-mode (npm) | tree-sitter (cargo)
+External dependencies (system):
+  claude CLI (Claude Code 2.x; uses claude login → Max)
+  codex CLI (0.128+; uses codex login → ChatGPT Plus)
+  context-mode (npm-installed once; spawned as MCP server sidecar; optional)
 ```
 
 ## Module responsibilities — quick reference
