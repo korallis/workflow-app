@@ -51,3 +51,14 @@ These are all CodeRabbit findings from PR #7 — port-and-test rather than reinv
 - `chrono` (timestamps)
 - `thiserror` (errors)
 - `tracing` (structured logs)
+- `futures` (BoxFuture alias for `DispatchFn`)
+- Dev: `tempfile` + `tokio` test-util.
+
+## Implementation status (2026-05-08)
+
+Crate scaffolded at `crates/kit-track-engine/`; implemented end-to-end via dual-harness `/project-execute` (commit `d65d8ad`). 15 unit tests pass; `cargo fmt`, `cargo clippy -- -D warnings`, and `cargo test --workspace` all green.
+
+**Follow-ups (recorded as deviations in the run report):**
+
+- `DispatchResult.pid` is defined but not persisted back to `kit-session-store` after dispatch starts — `kit-session-store` does not yet expose `track_update_pid`, `track_update_last_commit`, or `track_delete`. Grow those APIs in `kit-session-store` before wiring `skill-runner`'s production flow.
+- Merge sequencer uses `git2` cherrypick of each track tip rather than a full rebase-onto-integration-branch flow. Pragmatic first pass; revisit before production.

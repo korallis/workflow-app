@@ -45,10 +45,10 @@ The kit, ported to a single Rust binary. No GUI. Users install via `cargo instal
 **Modules:** spec-engine, track-engine.
 
 - [x] **spec-engine crate**: load/save the full spec hierarchy. Snapshot persistence to `session-store`. 11 tests passing. **Follow-up:** `parallel.yaml` validation + parsing are currently hand-rolled (rules match the bundled JSON Schema); swap to `jsonschema` + `serde_yaml` crates once cache is warm — see module CLAUDE.md "Implementation status" and LEARNINGS.md "Codex sandbox + Cargo".
-- [ ] **track-engine crate**: parallel-tracks state machine. Worktree create/cleanup. Merge sequencer (dependency-ordered rebase). Sentinel-watcher for operator-killed panes. Learnings-fragment merge.
-- [ ] Regression suite (port from bash): clean fixture, dep edge, slug boundary, dedupe, brownfield-without-yaml, claude-fails-fast.
+- [x] **track-engine crate** (commit `d65d8ad`): parallel-tracks state machine, mkdir-based RegistryLock + TrackLock guard structs, `git2`-driven worktree create/cleanup, sentinel-watcher with `tokio::time::sleep` polling, `git2` cherrypick merge sequencer. 15 unit tests passing. **Follow-ups:** (a) `kit-session-store` needs `track_update_pid` / `track_update_last_commit` / `track_delete` APIs before `DispatchResult.pid` can be persisted; (b) merge cherrypick should evolve into full rebase-onto-integration-branch — see module CLAUDE.md "Implementation status".
+- [x] Regression suite (subset): dedupe lower + mixed-case, brownfield-without-yaml reject, version reject, plan/topological-sort, registry-lock concurrency, sentinel-watcher pid-died. Remaining: claude-fails-fast, harness-validates-first integration tests against real bridges (deferred to Sprint 1.3).
 
-**Exit:** `track-engine` can plan + start two parallel tracks against a fixture spec, with state persisted via `session-store`.
+**Exit:** `track-engine` can plan + start parallel tracks against a fixture spec, with state persisted via `session-store`. ✅
 
 ### Sprint 1.3 — Bridges (1–2 wks)
 **Modules:** claude-bridge, codex-bridge.

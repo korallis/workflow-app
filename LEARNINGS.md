@@ -9,6 +9,36 @@ This file is updated at the end of every session. It captures mistakes, discover
 
 ## Patterns That Work
 
+### Pre-fetch warms ~/.cargo/registry/cache; warming workspace `Cargo.lock` is what Codex actually needs
+
+This is the corrected version of the earlier "Pre-fetch crates the SPEC names" pattern — that version was incomplete and led directly to a wasted dispatch.
+
+For `track-engine`, the SPEC named `tokio`, `git2`, `tracing`, `serde_yaml`, `futures` as load-bearing. Pre-flight ran `cargo fetch` against a `/tmp/te-prefetch` scratch crate — every crate ended up in `~/.cargo/registry/cache/`. Dispatch still fell back to `std::thread` + shell-out-to-`git`. Why: Codex ran `cargo build --offline`, which needs every dep present in the *workspace's* `Cargo.lock`. Lockfile entries only appear when the workspace itself depends on the crate. Warming `~/.cargo/registry/cache` warms downloads; it does not warm the lock.
+
+**The two-commit dispatch flow that fixes this:**
+
+1. Pre-create `crates/<module>/Cargo.toml` with the full dependency set named in the SPEC + module CLAUDE.md.
+2. Add the crate to the workspace `members`.
+3. `cargo build --package <module>` (online) — populates `Cargo.lock` for every transitive resolution.
+4. Verify `cargo build --package <module> --offline` succeeds against an empty `lib.rs` stub.
+5. Commit as `chore(<module>): scaffold crate with deps to warm Cargo.lock` (separate commit; clean post-Codex `git diff`).
+6. Dispatch — Codex's `cargo --offline` now resolves every named dep from the warm lock + cache.
+
+This produced track-engine's correct implementation (1327 lines using `git2::Repository`, `tokio::sync::mpsc`, `futures::future::BoxFuture`) on the second dispatch where the first had produced 1102 lines of std-only fallback.
+
+**Where to apply:** Every `/project-execute` against a Rust workspace where the new crate names deps not already used elsewhere in the workspace. The scaffold-then-dispatch flow should probably be promoted into `dispatch.sh` preflight (or into the project-execute skill itself).
+
+### Decision protocol when the first dispatch returns big-shape deviations
+
+`spec-engine` first run hand-rolled YAML/JSON-schema validation instead of using `jsonschema` + `serde_yaml` — accepted with follow-up. `track-engine` first run replaced Tokio with `std::thread`, `tokio::mpsc` with `std::sync::mpsc`, `git2` with shell-out, and `BoxFuture` with manual `Pin<Box<...>>` — re-dispatched with warmed lock.
+
+The differentiator is **deviation depth**. spec-engine's hand-rolled validator was an isolated 100-line block; the public API was unchanged. track-engine's std-vs-Tokio choice leaks into `DispatchFn`'s shape and the entire runtime model — every downstream consumer (skill-runner, gui-shell with Tauri's tokio runtime) would have had to bridge an unnecessary sync→async barrier. Mechanical-but-pervasive rewrites cost more than re-dispatching with the right preflight.
+
+**Where to apply:** When Codex returns deviations whose reason is "dependency not available offline":
+
+- If the deviation is **isolated** (one helper, swap-out is purely additive): accept + flag follow-up. Pattern matches `spec-engine`.
+- If the deviation is **architectural** (changes public API, runtime model, or downstream integration shape): reject + warm the workspace lockfile + re-dispatch.
+
 ### Pre-fetch crates the SPEC names before `/project-execute`
 
 For spec-engine the SPEC + CLAUDE explicitly named `jsonschema` (for `parallel.yaml.schema.json`) and implied `serde_yaml` (for the YAML round-trip). Codex's `workspace-write` sandbox couldn't resolve those crates from the registry on first compile, so it hand-rolled both — passing tests, but a real spec deviation that lands as a "revisit" TODO in the commit.
@@ -59,6 +89,33 @@ Codex's `--output-schema` report passed validation but contained:
 ---
 
 ## Mistakes & Fixes
+
+### Mistake: pre-fetch via /tmp scratch crate didn't warm the workspace lock (track-engine, run 1)
+
+For the first `track-engine` dispatch I followed the earlier "pre-fetch the spec-named crates" learning by running `cargo fetch` in `/tmp/te-prefetch`. Every named crate ended up in `~/.cargo/registry/cache/`, but Codex still hit "dependency not available offline" for `tokio`, `git2`, `tracing`, `serde_yaml`, `futures` — because `cargo --offline` resolves against `Cargo.lock` first and the workspace's lock had no entries for them. Result: 1102 lines of `std::thread`/shell-out fallback that had to be discarded.
+
+- **Symptom:** Codex's report listed 6 deviations citing "available offline" / "could not be resolved in this sandbox"; final code used `std::sync::mpsc` and `Command::new("git")` instead of `tokio::sync::mpsc` and `git2::Repository`.
+- **Root cause:** `~/.cargo/registry/cache` warming is necessary but not sufficient. `cargo --offline` requires every dep to also be present in the workspace `Cargo.lock`, which only happens when something in the workspace declares a dependency on it.
+- **Fix:** Discard the work, scaffold `crates/kit-track-engine/Cargo.toml` with the full named dependency set, add the crate to the workspace `members`, run `cargo build` once online so Cargo.lock gets the resolutions, commit the scaffold separately, then re-dispatch. Second dispatch produced the correct git2/tokio/futures implementation (commit `d65d8ad`).
+- **Prevention:** See "Pre-fetch warms ~/.cargo/registry/cache; warming workspace Cargo.lock is what Codex actually needs" in Patterns above.
+
+### Mistake: OMX-tool training-data interference is escalating across runs
+
+In the spec-engine run, Codex's report listed `.omx/state/.../ultrawork-state.json` in `files_modified` (gitignored — no commit pollution but a scope violation). In the track-engine runs (both attempts), Codex now actively shells out: `omx state clear --input '{"mode":"ultrawork","all_sessions":true,"workingDirectory":"/home/leeb/workflow-app"}' --json`, `omx cancel ultrawork`, and reads/edits `.omx/state/sessions/.../ultrawork-state.json` during its turn.
+
+- **Symptom:** Codex's `tests_run` lists `omx state clear` and `omx state list-active` as if they were part of the module's verification. Files under `.omx/` are modified mid-run. None of these paths appear in proposed commits, so verification gate catches them.
+- **Root cause:** Codex's environment has OMX MCP server hooks (`omx_state.state_clear`, stop-hook prompts about "active ultrawork sessions") that fire during long runs. Codex picks up the lifecycle and treats it as part of its own task. Pure training-data / parent-environment bleed-through.
+- **Fix (this run):** No action needed — `.omx/` is gitignored and excluded by explicit-paths `git add`. Recorded as a deviation in the run report so the verification gate flags it.
+- **Prevention:** Add `Do NOT call \`omx\` / \`ultrawork\` commands` and `Do NOT modify \`.omx/\`` to the kit-wide explicit-negatives list in `.claude/skills/project-execute/dispatch-prompt-template.md` so the next prompt rebuilds it explicitly. Even if the harness still tries, the negative is on record.
+
+### Mistake: dispatch.sh auth preflight default of 15s is sometimes too short
+
+The first track-engine re-dispatch (after scaffold commit) failed at the auth preflight step with `Auth or model availability error` — even though the auth was fine; the OpenAI auth check just took >15s on a slower round trip. `KIT_AUTH_PREFLIGHT_SECONDS=60` made it pass. Pure latency variance, not auth or model availability.
+
+- **Symptom:** Dispatch exits non-zero with `error: Auth or model availability error. Try \`codex login\`...` after the preflight prints a `model: gpt-5.5` block that proves auth was actually working.
+- **Root cause:** The preflight does a real round-trip to OpenAI to verify the model is accessible; on slower-network days that round-trip can exceed 15s.
+- **Fix:** Re-run with `KIT_AUTH_PREFLIGHT_SECONDS=60`.
+- **Prevention:** Consider raising the default in `.claude/lib/dispatch.sh` from 15s to ~30-45s — the cost of waiting longer when auth IS broken is small (still bounded), and the cost of false negatives on a healthy auth is a wasted dispatch attempt.
 
 ### Mistake: Codex hand-rolled validation instead of using spec-named crates (spec-engine)
 
