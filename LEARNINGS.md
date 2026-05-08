@@ -9,6 +9,22 @@ This file is updated at the end of every session. It captures mistakes, discover
 
 ## Patterns That Work
 
+### Realign stale specs before dispatching, not after
+
+For code-maps the SPEC and CLAUDE still referenced an N-API sibling crate (`kit-code-maps-napi`) and a TypeScript caller (`kit-engine`) — leftovers from before the 2026-05-08 pure-Rust pivot. The pre-dispatch sanity check caught it; if it had reached Codex unmodified, Codex would have built ~200 lines of dead Node-bindings code that the architecture has no consumer for.
+
+**Why:** Per-module SPECs have their own update cadence. A blueprint pivot can leave dependent SPECs lagging for hours or days. Codex follows the spec literally — it is not going to second-guess "but the blueprint says no Node."
+
+**Where to apply:** Before every `/project-execute`, grep the module SPEC + CLAUDE for terms eliminated by recent pivots (here: `N-API`, `napi`, `kit-engine`, `workflow-skills`, `Pi extension`). Realign in a tiny `spec(<module>):` commit BEFORE assembling the dispatch prompt — the prompt embeds the SPEC verbatim, so any staleness goes straight to the executor.
+
+### Pre-dispatch tree must be clean
+
+For code-maps the tree had `MODULES.md` + `ROADMAP.md` dirty from the prior `/project-blueprint` realignment. Committing those first (as a separate `docs:` commit) before dispatching meant the post-Codex `git status` / `git diff --stat` was a clean signal of "what Codex did, full stop."
+
+**Why:** The orchestrator-commits step needs to stage Codex's output by path. If unrelated files are dirty, you have to remember to exclude them, and the verification gate's `git diff` gets noisy.
+
+**Where to apply:** Always commit (or stash) pending edits before kicking off `/project-execute`. If you forget, `git add <module-path>/` lets you scope, but the cleaner habit is to dispatch from a clean tree.
+
 ### Orchestrator-commits split (`/project-execute`)
 
 Codex returns a single bundled `proposed_commits` entry; the orchestrator can and should split it where boundaries are clearer. For session-store the split was:
@@ -36,6 +52,23 @@ Codex's `--output-schema` report passed validation but contained:
 
 ## Mistakes & Fixes
 
+### Mistake: single-line JSDoc cleared before consumer line could read it (code-maps)
+
+Codex's JS/TS extractors collected docs into a `Vec<String>` and cleared it after every non-skip line. The skip condition was `line.starts_with('*') || line.starts_with("//") || line.is_empty()`, which catches the *body* of a multi-line JSDoc (`* foo`) but NOT a single-line JSDoc `/** Foo. */` — that line starts with `/`, falls through, and clears the just-collected doc before the next line's function declaration can read it.
+
+- **Symptom:** Two integration test failures (`javascript_fixture_matches_golden`, `typescript_fixture_matches_golden`) where the extractor produced `doc: None` but the golden file had `doc: Some("Starts the app.")`.
+- **Root cause:** Skip condition didn't include `/*` prefix. `collect_js_doc` correctly captured the doc; the consuming loop immediately threw it away.
+- **Fix:** Add `line.starts_with("/*")` to the skip condition in both extractors.
+- **Prevention:** When a doc-comment helper is "collect into buffer / clear after each line," verify the skip-or-clear condition is the inverse of the conditions the helper recognises. Same shape, opposite role.
+
+### Mistake: explicit-path `git add` missed Cargo.lock
+
+When committing the code-maps scaffold, I staged `Cargo.toml` + `crates/code-maps/` explicitly. Cargo.lock got modified by `cargo build` but stayed unstaged, so the feat commit went out without the locked dependencies and a tiny chore follow-up commit had to clean it up.
+
+- **Symptom:** Two commits where one would have done; second one is just `chore: refresh Cargo.lock`.
+- **Root cause:** Habit of staging by path skipped the lockfile because it's not under the module dir.
+- **Fix/prevention:** When a module adds new deps in its `Cargo.toml`, always also `git add Cargo.lock` (or just stage the lockfile in the same commit as the workspace-members edit).
+
 ### Mistake: kit's report schema was OpenAI-strict-mode incompatible
 
 `.claude/skills/project-execute/codex-report-schema.json` declared `additionalProperties: false` but listed `notes` and `body` only in `properties`, not `required`. OpenAI Responses API rejected the schema at turn 0 with `invalid_json_schema`, killing every dispatch before any work happened.
@@ -57,6 +90,12 @@ Codex generated `assert!(matches!(err, …DuplicateTrackModule { module } …))`
 ---
 
 ## Stack-Specific Notes
+
+### tree-sitter 0.25 core + mixed grammar versions (0.23–0.25)
+
+The code-maps CLAUDE warned to "pin all together in `Cargo.toml`" because grammars must match the tree-sitter core. In practice tree-sitter 0.25 happily loaded grammars built against 0.23 (`tree-sitter-typescript 0.23`, `tree-sitter-ruby 0.23`) alongside 0.25 grammars (`tree-sitter-rust 0.24`, `tree-sitter-go 0.25`, etc.). Compiles clean, all extractors work. The pin-everything-together rule is overcautious for the 0.23–0.25 window.
+
+**When it matters:** Adding a new grammar. Don't refuse a grammar just because it's a minor version behind the core — try compiling first.
 
 ### Codex CLI 0.128 + ChatGPT auth + `gpt-5.5`
 
@@ -81,6 +120,12 @@ The blueprint warns Tauri may pin rusqlite to a specific version; we picked 0.31
 ---
 
 ## Open Questions
+
+### Code Maps `Class` items always have empty `methods` and `fields` in v1
+
+SPEC §3 declares `Item::Class { methods: Vec<Signature>, fields: Vec<Signature>, ... }` but no v1 extractor populates these — every class is emitted with empty vecs. SPEC §7's "fallback for files in unsupported languages: return a Code Map with empty `items`" was Codex's licence to leave class internals empty, but that wasn't the spec's intent for *supported* languages.
+
+**Question:** Is method/field extraction a v1.1 task (incremental enhancement) or a v1 gap that should be filled before code-maps is consumed by `skill-runner` for prompt assembly? If v1.1, document it in SPEC §9 explicitly. If v1, write the next pass before we plug into prompt builders that expect class APIs to surface methods.
 
 ### Should `learnings_fts` queries return snippet/highlight extracts?
 
