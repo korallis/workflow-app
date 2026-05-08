@@ -3,3 +3,9 @@
 .env.local
 .env*.local
 .dev.vars
+
+# Rust / Cargo
+target/
+
+# Dual-harness orchestration artefacts (logs, prompts, reports)
+.kit-orchestration/
