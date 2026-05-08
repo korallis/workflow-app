@@ -1,0 +1,9 @@
+version: 1
+touches:
+  - packages/workflow-skills/extensions/codex-bridge/**
+  - crates/kit-codex-bridge/**
+  - crates/kit-codex-bridge-napi/**
+shared:
+  - packages/kit-scrub/**
+ports: []
+migrations: false

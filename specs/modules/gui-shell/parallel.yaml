@@ -1,0 +1,8 @@
+version: 1
+touches:
+  - apps/gui-shell/**
+shared:
+  - packages/workflow-skills/skills/project-execute/codex-report-schema.json
+ports:
+  - 1420
+migrations: false

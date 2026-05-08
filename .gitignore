@@ -1,0 +1,5 @@
+# AI Project Kit
+.env
+.env.local
+.env*.local
+.dev.vars

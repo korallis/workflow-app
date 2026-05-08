@@ -1,0 +1,8 @@
+version: 1
+touches:
+  - packages/workflow-skills/extensions/kit-engine/**
+  - crates/kit-engine-native/**
+shared:
+  - packages/workflow-skills/extensions/kit-engine/schemas/**
+ports: []
+migrations: false

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "hooks": {
+    "PreCompact": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pre-compact.sh"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && if compgen -G 'specs/sessions/*-plan.md' >/dev/null 2>&1; then echo \"Session resumed after compaction. Latest snapshot: $(ls -1t specs/sessions/*-plan.md 2>/dev/null | head -1)\"; else echo 'Session resumed after compaction. No prior snapshot found in specs/sessions/.'; fi"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,7 @@
+version: 1
+touches:
+  - crates/code-maps/**
+  - crates/kit-code-maps-napi/**
+shared: []
+ports: []
+migrations: false

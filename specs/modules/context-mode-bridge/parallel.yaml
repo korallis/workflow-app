@@ -1,0 +1,6 @@
+version: 1
+touches:
+  - packages/workflow-skills/extensions/context-mode-bridge/**
+shared: []
+ports: []
+migrations: false

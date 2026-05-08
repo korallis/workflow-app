@@ -1,0 +1,84 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Codex Final Report",
+  "description": "Schema enforced via `codex exec --output-schema` so the executor's final message is machine-readable. Catches training-data bleed-through (free-form claims like 'X is now complete' for projects that aren't this one) by forcing every field to map to repo state the orchestrator can verify.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "phases_completed",
+    "files_modified",
+    "files_created",
+    "tests_run",
+    "proposed_commits",
+    "deviations",
+    "open_questions"
+  ],
+  "properties": {
+    "phases_completed": {
+      "type": "array",
+      "description": "Phases or numbered steps from the module spec that were completed. Use the exact step numbers/names from CLAUDE.md.",
+      "items": { "type": "string" }
+    },
+    "files_modified": {
+      "type": "array",
+      "description": "Repository-relative paths of modified existing files.",
+      "items": { "type": "string" }
+    },
+    "files_created": {
+      "type": "array",
+      "description": "Repository-relative paths of newly created files.",
+      "items": { "type": "string" }
+    },
+    "tests_run": {
+      "type": "array",
+      "description": "Each test command actually executed and its outcome.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["command", "outcome"],
+        "properties": {
+          "command": { "type": "string" },
+          "outcome": { "type": "string", "enum": ["passed", "failed", "skipped"] },
+          "notes": { "type": "string" }
+        }
+      }
+    },
+    "proposed_commits": {
+      "type": "array",
+      "description": "Suggested commit boundaries for the orchestrator. Codex MUST NOT commit; the orchestrator inspects the working tree and applies these.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["subject", "paths"],
+        "properties": {
+          "subject": { "type": "string", "description": "Conventional Commit subject line, <72 chars." },
+          "body": { "type": "string", "description": "Optional commit body explaining motivation." },
+          "paths": {
+            "type": "array",
+            "description": "Repository-relative paths included in this commit.",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    },
+    "deviations": {
+      "type": "array",
+      "description": "Anywhere this run departed from the spec. Empty array if perfect compliance.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["spec_section", "what_changed", "reason"],
+        "properties": {
+          "spec_section": { "type": "string", "description": "Spec section reference (e.g. 'SPEC.md §6 brownfield detection')." },
+          "what_changed": { "type": "string" },
+          "reason": { "type": "string" }
+        }
+      }
+    },
+    "open_questions": {
+      "type": "array",
+      "description": "Questions Codex couldn't resolve and wants the orchestrator to decide.",
+      "items": { "type": "string" }
+    }
+  }
+}

@@ -1,0 +1,5 @@
+# Snapshots written by .claude/hooks/pre-compact.sh
+# Treat as ephemeral runtime artefacts — do not commit.
+*
+!.gitignore
+!.gitkeep

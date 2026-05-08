@@ -1,0 +1,6 @@
+*.log
+*.jsonl
+*-report.json
+*-last.md
+*-snapshot.md
+.lock
