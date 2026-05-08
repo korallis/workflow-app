@@ -9,6 +9,14 @@ This file is updated at the end of every session. It captures mistakes, discover
 
 ## Patterns That Work
 
+### Pre-fetch crates the SPEC names before `/project-execute`
+
+For spec-engine the SPEC + CLAUDE explicitly named `jsonschema` (for `parallel.yaml.schema.json`) and implied `serde_yaml` (for the YAML round-trip). Codex's `workspace-write` sandbox couldn't resolve those crates from the registry on first compile, so it hand-rolled both — passing tests, but a real spec deviation that lands as a "revisit" TODO in the commit.
+
+**Why:** `~/.cargo/registry/cache` is shared with Codex (same `$HOME`), but a crate that has never been built on this host isn't there yet. The sandbox network block then short-circuits Codex to the path of least resistance: hand-roll. This makes a good test pass mask a poor library choice.
+
+**Where to apply:** Before dispatching, run `cargo add --dry-run <crate>` or `cargo fetch -p <pkg>` for each new dep the SPEC names, in a throwaway scratch crate or by adding them to the workspace stub. Then dispatch. The dispatcher's preflight should probably do this automatically — added as a follow-up.
+
 ### Realign stale specs before dispatching, not after
 
 For code-maps the SPEC and CLAUDE still referenced an N-API sibling crate (`kit-code-maps-napi`) and a TypeScript caller (`kit-engine`) — leftovers from before the 2026-05-08 pure-Rust pivot. The pre-dispatch sanity check caught it; if it had reached Codex unmodified, Codex would have built ~200 lines of dead Node-bindings code that the architecture has no consumer for.
@@ -51,6 +59,30 @@ Codex's `--output-schema` report passed validation but contained:
 ---
 
 ## Mistakes & Fixes
+
+### Mistake: Codex hand-rolled validation instead of using spec-named crates (spec-engine)
+
+The SPEC for spec-engine bundled `parallel.yaml.schema.json` and CLAUDE.md said schemas are "loaded once via `jsonschema` crate." Codex's sandbox couldn't fetch `jsonschema` or `serde_yaml` (no cache hit + no network), so it embedded the schema via `include_str!` but enforced it with a 100-line hand-rolled validator and parsed YAML with another 90 lines of bespoke code. **All 11 tests pass and the `parallel.yaml` rules (`version: 1`, required fields, types) are correctly enforced** — but the dep choice diverges from the spec.
+
+**Symptom:** Final report listed two `deviations` against `specs/modules/spec-engine/CLAUDE.md`. `git diff Cargo.toml` showed no `jsonschema` / `serde_yaml` entries; the crate's deps were the minimal `regex + serde + serde_json + thiserror`.
+
+**Root cause:** Codex's `workspace-write` sandbox blocked crates.io DNS, and neither crate was in `~/.cargo/registry/cache`. The path of least resistance was to hand-roll.
+
+**Fix (this run):** Accepted the commit (it meets every SPEC §7 acceptance criterion) and recorded a follow-up: swap to `jsonschema` + `serde_yaml` once the cache is warm. Commit body explicitly flags both deviations.
+
+**Prevention:** Pre-fetch named crates before dispatch (see Patterns above). The dispatcher's preflight should grow a "scan SPEC + module CLAUDE for `crate` mentions, run `cargo fetch` for each, fail dispatch if any unresolved" step. Also: if Codex *must* hand-roll, push that into `deviations` reason and the commit body — which it did, so the verification gate worked.
+
+### Mistake: training-data bleed-through (`.omx/state/...` ultrawork-state edit)
+
+Codex's `files_modified` listed `.omx/state/sessions/.../ultrawork-state.json` — a state file from a foreign tool ("OMX ultrawork stop hook") that has nothing to do with this repo. Codex was trying to mark its own runtime as "complete" because a stop-hook from another harness was blocking it.
+
+**Symptom:** `git status` was clean for the path (gitignored via `.git/info/exclude`), but the report listed it. If `.omx/` had not been excluded, this would have polluted the commit.
+
+**Root cause:** Codex inherits the host's `$HOME` and any tool that writes state under `~/.something/` or `<project>/.something/` is fair game for cross-tool interference.
+
+**Fix:** No action — the path is gitignored locally. Flagged to user; commit excluded it via `git add` of explicit paths only.
+
+**Prevention:** Always `git add <explicit-paths>` (never `git add -A`) when applying Codex's `proposed_commits`. The kit's verification gate (cross-check report `files_modified` against `git status --short`) catches phantom edits like this — this run is the working-as-intended example.
 
 ### Mistake: single-line JSDoc cleared before consumer line could read it (code-maps)
 
