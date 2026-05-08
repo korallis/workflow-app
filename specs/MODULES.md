@@ -62,68 +62,76 @@ External dependencies (system):
 
 ## Module responsibilities — quick reference
 
-### 1. workflow-skills (TypeScript)
-The 12 kit slash commands (`/project-init`, `/project-research`, `/project-blueprint`, `/project-spec`, `/project-module`, `/project-execute`, `/project-review`, `/project-security-review`, `/project-tracks`, `/project-status`, `/project-deploy`, `/project-test`) as Pi prompt templates and `SKILL.md` files. Read by Pi from a versioned npm package `@korallis/workflow-skills`. Each skill mirrors the bash kit version 1:1, with content tweaks where the Pi context (vs Claude Code context) makes a difference.
-
-### 2. kit-engine (TypeScript + native Rust)
-Two sub-domains in one Pi extension:
-- **Spec engine:** load/save/validate `specs/PROJECT_BRIEF.md`, `specs/RESEARCH.md`, `specs/MASTER_BLUEPRINT.md`, `specs/MODULES.md`, `specs/ROADMAP.md`, `specs/modules/*/SPEC.md|CLAUDE.md|parallel.yaml`. Schema validation via JSON Schema for `parallel.yaml`.
-- **Track engine:** parallel-tracks state machine (port of bash `project-tracks.sh`). Worktree creation/cleanup. Merge sequencer (dependency-ordered rebase). Sentinel-watcher for operator-killed panes. Learnings-fragment merge.
-
-Surface: Pi tools (e.g. `kit_track_plan`, `kit_track_start`, `kit_spec_load`, `kit_learnings_search`) + a native Rust crate via N-API for SQLite + tree-sitter calls.
-
-### 3. codex-bridge (TypeScript + Rust)
-Pi extension that exposes Codex execution as a Pi tool (`kit_codex_execute`). Internally uses [`codex-codes`](https://docs.rs/codex-codes) Rust crate via N-API for the JSON-RPC transport. Forces `--output-schema` against `codex-report-schema.json`. Surfaces approval callbacks (`applyPatchApproval`, `execCommandApproval`) to the GUI's approval dialog.
-
-### 4. claude-bridge (TypeScript)
-Pi extension that exposes Claude execution as a Pi tool (`kit_claude_execute`). Spawns `claude --print --output-format stream-json --include-partial-messages` as a child process, parses JSONL events (`thread.started`, `turn.completed`, `item.completed` with `command_execution`/`file_change`/`agent_message`), normalises into a Pi event stream.
-
-### 5. context-mode-bridge (TypeScript)
-Pi extension that:
-1. On Pi startup, spawns context-mode as a managed MCP server subprocess.
-2. Registers `ctx_*` tools with Pi.
-3. Installs a PreToolUse hook that routes tool outputs through `ctx_execute` (sandbox) or `ctx_index` (FTS5 store).
-4. Exposes `ctx_stats` to the GUI for context-saving telemetry.
-
-### 6. session-store (Rust crate)
+### 1. session-store (Rust crate) — `crates/session-store/`
 - rusqlite v0.31+ with bundled SQLite, WAL mode, busy_timeout 5s.
 - FTS5 virtual table for `LEARNINGS` full-text + BM25.
 - Tables: `tracks`, `track_events`, `learnings`, `learnings_fts`, `spec_snapshots`, `schema_version`.
 - Migration system: versioned Rust functions, idempotent.
 - Per-project DB at `<project>/.kit-workflow-app/state.db`. Global cross-project DB at `~/.kit-workflow-app/global.db` (for cross-project queries like "all my projects' open questions").
-- Mutex<Connection> shared state pattern (per ELVES DECISIONS.md rationale).
+- `Mutex<Connection>` shared state pattern (per ELVES DECISIONS.md rationale).
+- **Status:** scaffolded; 7 tests passing in `cargo test --workspace`.
 
-### 7. code-maps (Rust crate)
+### 2. code-maps (Rust crate)
 - Tree-sitter `binding_rust`. Pre-built grammars for: rust, typescript, javascript, python, go, ruby (v1); java, c, cpp (v1.1).
 - Public API: `generate_code_map(path: &Path, lang: Language) -> CodeMap` returning a struct with classes, functions, methods, imports, exports — code body stripped, signatures kept.
 - Token-budget mode: prune lowest-priority entries until fit.
-- Exposed via N-API for Pi extensions and Tauri commands for the GUI.
+- Exposed via Tauri commands for the GUI and called directly from `skill-runner` for prompt assembly.
 
-### 8. gui-shell (Tauri+React)
-- Tauri v2.11 (latest stable).
-- Frontend: React 19 + TypeScript 5.8 (strict) + Vite 7 + Tailwind v4 (CSS-first config) + Zustand for state. (Stack ratified by ELVES DECISIONS.md.)
-- xterm.js for any embedded PTY views.
+### 3. spec-engine (Rust crate)
+Spec hierarchy CRUD. Loads, saves, and validates the project's spec tree:
+- `specs/PROJECT_BRIEF.md`, `specs/RESEARCH.md`, `specs/MASTER_BLUEPRINT.md`, `specs/MODULES.md`, `specs/ROADMAP.md`
+- `specs/modules/<name>/SPEC.md`, `CLAUDE.md`, `parallel.yaml`
+
+Schema-validates `parallel.yaml` against `parallel.yaml.schema.json`. Persists `spec_snapshots` rows to `session-store` so `skill-runner` can resume from compaction. Does not directly call `claude` or `codex`; it's a pure data layer.
+
+### 4. track-engine (Rust crate)
+Parallel-tracks state machine. Direct port of the bash kit's `project-tracks.sh` with all CodeRabbit-vetted invariants carried forward:
+- Worktree creation/cleanup (one git worktree per track).
+- Merge sequencer (dependency-ordered rebase + apply).
+- Sentinel-watcher: detects operator-killed panes; transitions to `aborted` state with branch+worktree preservation.
+- Learnings-fragment merge: per-track `LEARNINGS-fragment.md` rolls up into root `LEARNINGS.md`.
+- Reads dependency edges from `parallel.yaml` via `spec-engine`; reads/writes track state via `session-store`.
+
+### 5. claude-bridge (Rust crate)
+Tokio subprocess wrapper for `claude --print --bare --append-system-prompt-file <ours> --output-format stream-json --include-partial-messages`. Uses the user's `claude login` (Max plan) — ToS-clean because we invoke Claude Code itself, never ingesting its OAuth token. `--bare` skips Claude Code's hook/skill/MCP/CLAUDE.md auto-discovery so we own the context. Parses JSONL events (`thread.started`, `turn.completed`, `item.completed` with `command_execution`/`file_change`/`agent_message`) into a typed event stream.
+
+### 6. codex-bridge (Rust crate) — direct OAuth, NOT a subprocess
+Implements PKCE OAuth against `auth.openai.com` (same `CLIENT_ID` as Pi/Codex CLI), stores tokens in `~/.kit-workflow-app/auth.json`, calls Codex Responses API directly at `chatgpt.com/backend-api/codex/responses` with `store: false, stream: true, instructions: <ours>`. Uses ChatGPT Plus/Pro via OpenAI's Codex-for-OSS program (explicitly endorsed). Forces `--output-schema` semantics against `codex-report-schema.json` and surfaces approval callbacks (`applyPatchApproval`, `execCommandApproval`) to the GUI's approval dialog. The asymmetry vs claude-bridge is mandated by provider policies — see `SPEC_REVISION_2026-05-08.md`.
+
+### 7. context-mode-manager (Rust crate)
+Tokio subprocess + `rmcp` MCP client. Spawns and supervises [`mksglu/context-mode`](https://github.com/mksglu/context-mode) as an MCP server sidecar. Routes tool outputs through `ctx_execute` (sandbox) or `ctx_search` (FTS5 store) — typically a 90%+ context reduction. Optional: skipped when `KIT_CONTEXT_MODE_DISABLE=1`. Exposes `ctx_stats` for the GUI status bar.
+
+### 8. skill-runner (Rust crate)
+The agent loop. Bundles the 12 kit slash commands as embedded markdown assets (`crates/skill-runner/skills/<name>.md`):
+`/project-init`, `/project-research`, `/project-blueprint`, `/project-spec`, `/project-module`, `/project-execute`, `/project-review`, `/project-security-review`, `/project-tracks`, `/project-status`, `/project-deploy`, `/project-test`. For each invocation: assembles prompts (using `code-maps` for context efficiency), routes to `claude-bridge` or `codex-bridge`, processes results, applies orchestrator-commits via `git2`. Top-level orchestrator that everything else feeds into.
+
+### 9. gui-shell (Tauri 2 + React 19)
+- Tauri v2.11 (latest stable). Single binary; system WebView; bundle ≤30 MB.
+- Frontend: React 19 + TypeScript 5.8 (strict) + Vite 7 + Tailwind v4 (CSS-first config) + Zustand. (Stack ratified by ELVES DECISIONS.md.)
+- xterm.js + portable-pty for the optional embedded agent stream.
 - CodeMirror 6 for the diff viewer (Apply Mode).
-- Communicates with Pi via stdio RPC: spawns Pi at app start, holds a long-lived RPC connection, marshals responses to React via Tauri events.
+- Communicates with the Rust core via Tauri commands and Tauri events — **no Pi**, no stdio RPC. The core crates are linked directly into `src-tauri`.
 - Screens: Projects landing, Onboarding/Auth, Plan Board, File Picker + Code Maps, Apply Mode diff viewer, Learnings Browser, Settings.
 
 ## Module ordering & criticality
 
 | Order | Module | Critical path? | Why |
 |---|---|---|---|
-| 1 | session-store | ✅ | Foundation: every other module reads/writes through it. |
-| 2 | code-maps | ✅ | Used by spec-engine for module dependency graphs and by the GUI's file picker. |
-| 3 | kit-engine | ✅ | Drives everything. Without it, no workflow. |
-| 4 | claude-bridge | ✅ | Cheapest harness to wire (just subprocess + JSONL parsing). |
-| 5 | codex-bridge | ✅ | Needed for `/project-execute`. |
-| 6 | workflow-skills | ✅ | The user-visible kit commands. Mostly content (markdown), so fast to land once 1-5 work. |
-| 7 | context-mode-bridge |   | Adds dramatic context efficiency but kit functions without it; cut from MVP if needed. |
-| 8 | gui-shell |   | Most user value but slowest to build; can ship engine-only TUI first. |
+| 1 | session-store | ✅ | Foundation: every other module reads/writes through it. **(scaffolded)** |
+| 2 | code-maps | ✅ | Used for prompt context assembly and the GUI's file picker. Zero internal deps. |
+| 3 | spec-engine | ✅ | Spec CRUD; needed by track-engine and skill-runner. Depends only on session-store. |
+| 4 | track-engine | ✅ | Parallel-tracks logic. Depends on session-store + spec-engine. |
+| 5 | claude-bridge | ✅ | Cheapest harness to wire (subprocess + JSONL parsing). Zero internal deps. |
+| 6 | codex-bridge | ✅ | Needed for `/project-execute`. Direct OAuth flow; zero internal deps. |
+| 7 | context-mode-manager |   | Dramatic context efficiency, but kit functions without it; cut from MVP if needed. |
+| 8 | skill-runner | ✅ | The agent loop; pulls every other crate together. The point of the project. |
+| 9 | gui-shell |   | Most user value but slowest to build; can ship CLI-only first. |
 
-A v0.1 MVP could skip modules 7 + 8 and ship as a Pi-package only, driven by the user typing slash commands in Pi's interactive TUI — equivalent to the bash kit's UX but cross-platform. v0.2 adds context-mode-bridge. v0.3 ships the GUI.
+A v0.1 MVP could skip modules 7 + 9 and ship as a CLI binary (`kit`) driven by the user typing slash commands at a prompt — equivalent to the bash kit's UX but cross-platform and single-install. v0.2 adds context-mode-manager. v0.3 ships the GUI.
 
-## Open questions for Phase 4
+## Open questions
 
-- Does the GUI use **Tauri events** for Pi RPC notifications, or do we run an embedded **WebSocket** for richer pub/sub? (Tauri events are simpler; WebSocket lets browser-mode work later.)
+- Does the GUI use **Tauri events** for core→frontend notifications, or do we run an embedded **WebSocket** for richer pub/sub? (Tauri events are simpler; WebSocket lets browser-mode work later.)
 - Should `code-maps` support **incremental updates** in v1, or full-repo rescans only? Incremental is faster on large repos but more complex.
-- For **dogfooding**, the natural flow is to scaffold v0.1 manually (no kit), then start using v0.1 to build v0.2. When does the dogfood handover happen?
+- For **dogfooding**, the natural flow is to scaffold v0.1 manually (no kit), then start using v0.1 to build v0.2. When does the dogfood handover happen? Currently bootstrapping with the bash kit (`/project-execute` via Codex CLI subprocess) — see `LEARNINGS.md` for dispatch-infra discoveries.
+- **Local vs global learnings split:** `session-store` exposes a per-project DB. The blueprint mentions a cross-project DB at `~/.kit-workflow-app/global.db` but no API yet distinguishes "local-only learning" vs "promote to global." To resolve when `spec-engine` or `skill-runner` first needs the cross-project query.
